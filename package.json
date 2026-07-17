@@ -1,0 +1,19 @@
+{
+  "name": "kdzs-feishu-payroll-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "快递助手 ERP 到飞书多维表格的增量同步与主播工资月结",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "sync": "node src/index.js sync",
+    "sync:full": "node src/index.js sync --full",
+    "payroll": "node src/index.js payroll",
+    "migrate": "node src/index.js migrate",
+    "check": "node src/index.js check",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}

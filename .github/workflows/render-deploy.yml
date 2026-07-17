@@ -1,0 +1,106 @@
+name: Deploy to Render
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: render-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or deploy Render service
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_BASE_TOKEN: ${{ secrets.FEISHU_BASE_TOKEN }}
+          REPO_URL: https://github.com/Mad12345-qw/kdzs-feishu-payroll-sync
+          SERVICE_NAME: kdzs-feishu-payroll-sync
+        run: |
+          set -euo pipefail
+          api() {
+            curl --fail --silent --show-error \
+              -H "Authorization: Bearer $RENDER_API_KEY" \
+              -H "Accept: application/json" \
+              -H "Content-Type: application/json" "$@"
+          }
+
+          owners=$(api "https://api.render.com/v1/owners?limit=20")
+          owner_id=$(echo "$owners" | jq -r '.[0].owner.id // .[0].id // empty')
+          test -n "$owner_id"
+
+          services=$(api "https://api.render.com/v1/services?limit=100")
+          service_id=$(echo "$services" | jq -r --arg name "$SERVICE_NAME" '.[] | select((.service.name // .name) == $name) | (.service.id // .id)' | head -1)
+
+          if [ -z "$service_id" ]; then
+            payload=$(jq -n \
+              --arg name "$SERVICE_NAME" \
+              --arg owner "$owner_id" \
+              --arg repo "$REPO_URL" \
+              --arg app_id "$FEISHU_APP_ID" \
+              --arg app_secret "$FEISHU_APP_SECRET" \
+              --arg base_token "$FEISHU_BASE_TOKEN" \
+              '{
+                type: "web_service",
+                name: $name,
+                ownerId: $owner,
+                repo: $repo,
+                branch: "main",
+                autoDeploy: "yes",
+                envVars: [
+                  {key:"FEISHU_APP_ID",value:$app_id},
+                  {key:"FEISHU_APP_SECRET",value:$app_secret},
+                  {key:"FEISHU_BASE_TOKEN",value:$base_token},
+                  {key:"FEISHU_SESSION_TABLE_ID",value:"tblDvIDJSSxHqKj8"},
+                  {key:"SCHEDULER_ENABLED",value:"true"},
+                  {key:"SYNC_ENABLED",value:"false"},
+                  {key:"HEALTH_INTERVAL_MINUTES",value:"10"},
+                  {key:"TZ",value:"Asia/Shanghai"}
+                ],
+                serviceDetails: {
+                  runtime: "node",
+                  plan: "free",
+                  region: "singapore",
+                  healthCheckPath: "/health",
+                  envSpecificDetails: {
+                    buildCommand: "npm install",
+                    startCommand: "npm start"
+                  }
+                }
+              }')
+            created=$(api -X POST -d "$payload" "https://api.render.com/v1/services")
+            service_id=$(echo "$created" | jq -r '.service.id')
+            deploy_id=$(echo "$created" | jq -r '.deployId')
+            service_url=$(echo "$created" | jq -r '.service.serviceDetails.url')
+          else
+            deployed=$(api -X POST -d '{}' "https://api.render.com/v1/services/$service_id/deploys")
+            deploy_id=$(echo "$deployed" | jq -r '.id')
+            details=$(api "https://api.render.com/v1/services/$service_id")
+            service_url=$(echo "$details" | jq -r '.serviceDetails.url')
+          fi
+
+          echo "service_id=$service_id"
+          echo "deploy_id=$deploy_id"
+          echo "service_url=$service_url"
+          echo "## Render deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Service: $service_id" >> "$GITHUB_STEP_SUMMARY"
+          echo "- URL: $service_url" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Health: $service_url/health" >> "$GITHUB_STEP_SUMMARY"
+
+          for attempt in $(seq 1 60); do
+            deploy=$(api "https://api.render.com/v1/services/$service_id/deploys/$deploy_id")
+            status=$(echo "$deploy" | jq -r '.status')
+            echo "deploy status: $status"
+            case "$status" in
+              live) exit 0 ;;
+              build_failed|update_failed|canceled|deactivated) exit 1 ;;
+            esac
+            sleep 10
+          done
+          echo "deployment timed out" >&2
+          exit 1

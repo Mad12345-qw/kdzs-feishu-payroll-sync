@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: kdzs-feishu-payroll-sync
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: FEISHU_BASE_TOKEN
+        value: LJB0bAyHFaTJ09sooPactc2xn4e
+      - key: FEISHU_SESSION_TABLE_ID
+        value: tblDvIDJSSxHqKj8
+      - key: SCHEDULER_ENABLED
+        value: "true"
+      - key: SYNC_ENABLED
+        value: "false"
