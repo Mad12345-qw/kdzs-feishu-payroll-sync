@@ -95,7 +95,12 @@ jobs:
               ]')
             api -X PUT -d "$env_payload" "https://api.render.com/v1/services/$service_id/env-vars" >/dev/null
             deployed=$(api -X POST -d '{}' "https://api.render.com/v1/services/$service_id/deploys")
-            deploy_id=$(echo "$deployed" | jq -r '.id')
+            deploy_id=$(echo "$deployed" | jq -r '.id // .deploy.id // .[0].deploy.id // .[0].id // empty')
+            if [ -z "$deploy_id" ]; then
+              latest=$(api "https://api.render.com/v1/services/$service_id/deploys?limit=1")
+              deploy_id=$(echo "$latest" | jq -r '.[0].deploy.id // .[0].id // empty')
+            fi
+            test -n "$deploy_id"
             details=$(api "https://api.render.com/v1/services/$service_id")
             service_url=$(echo "$details" | jq -r '.serviceDetails.url')
           fi
