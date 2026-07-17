@@ -13,19 +13,36 @@ export class NewPayrollService {
     const [people, payroll] = await Promise.all([
       this.feishu.listRecords(this.tables.people.id), this.feishu.listRecords(this.tables.payrollSettlement.id),
     ]);
-    const existing = new Set(payroll.filter((record) => {
+    const existing = new Map(payroll.filter((record) => {
       const timestamp = number(record.fields?.["月份"]);
       return timestamp >= bounds.start.getTime() && timestamp <= bounds.end.getTime();
-    }).map((record) => value(record.fields?.["姓名"])));
-    const rows = people.filter((record) => value(record.fields?.["在职状态"]) !== "离职").map((record) => record.fields || {})
-      .filter((person) => person["姓名"] && person["所属店铺"] && !existing.has(value(person["姓名"])))
-      .map((person) => ({
-        "员工月份": `${month}|${value(person["姓名"])}`, "月份": bounds.start.getTime(), "姓名": value(person["姓名"]),
-        "店铺": value(person["所属店铺"]), "基本工资": number(person["基本工资"]), "提成比例": number(person["提成百分比"]),
-        "绩效工资": 0, "奖金": 0, "扣款": 0, "结算状态": "待结算",
-      }));
-    if (rows.length) await this.feishu.batchCreate(this.tables.payrollSettlement.id, rows);
-    return { month, created: rows.length };
+    }).map((record) => [value(record.fields?.["姓名"]), record]));
+    const creates = []; const updates = [];
+    for (const record of people) {
+      const person = record.fields || {};
+      if (value(person["在职状态"]) === "离职") continue;
+      const name = value(person["姓名"]); const store = value(person["所属店铺"]);
+      if (!name || !store) continue;
+      const current = existing.get(name);
+      const latest = {
+        "店铺": store, "基本工资": number(person["基本工资"]), "提成比例": number(person["提成百分比"]),
+      };
+      if (!current) {
+        creates.push({
+          "员工月份": `${month}|${name}`, "月份": bounds.start.getTime(), "姓名": name, ...latest,
+          "绩效工资": 0, "奖金": 0, "扣款": 0, "结算状态": "待结算",
+        });
+        continue;
+      }
+      if (value(current.fields?.["结算状态"]) === "已结算") continue;
+      const changed = value(current.fields?.["店铺"]) !== latest["店铺"]
+        || number(current.fields?.["基本工资"]) !== latest["基本工资"]
+        || number(current.fields?.["提成比例"]) !== latest["提成比例"];
+      if (changed) updates.push({ record_id: current.record_id, fields: latest });
+    }
+    if (creates.length) await this.feishu.batchCreate(this.tables.payrollSettlement.id, creates);
+    if (updates.length) await this.feishu.batchUpdate(this.tables.payrollSettlement.id, updates);
+    return { month, created: creates.length, updated: updates.length };
   }
 
   async settlePreviousMonth({ now = new Date(), settlementDay = 15, force = false } = {}) {

@@ -19,6 +19,8 @@ const state = {
   lastSyncError: null,
   lastDailySyncAt: null,
   lastDailySyncError: null,
+  operationalSyncRunning: false,
+  dailySyncRunning: false,
   erpStockTotal: null,
   baseTableCount: null,
 };
@@ -30,6 +32,7 @@ let lastDailyDate = "";
 async function runOperationalSync() {
   if (!config.runtime.syncEnabled || syncRunning) return;
   syncRunning = true;
+  state.operationalSyncRunning = true;
   try {
     const kdzs = await createKdzsFromSessionTable(feishu, config);
     const service = new NewBaseSyncService({ feishu, kdzs, config });
@@ -41,12 +44,14 @@ async function runOperationalSync() {
     console.error(error);
   } finally {
     syncRunning = false;
+    state.operationalSyncRunning = false;
   }
 }
 
 async function runDailySync() {
   if (!config.runtime.syncEnabled || dailyRunning) return;
   dailyRunning = true;
+  state.dailySyncRunning = true;
   try {
     const kdzs = await createKdzsFromSessionTable(feishu, config);
     const service = new NewBaseSyncService({ feishu, kdzs, config });
@@ -63,7 +68,13 @@ async function runDailySync() {
     console.error(error);
   } finally {
     dailyRunning = false;
+    state.dailySyncRunning = false;
   }
+}
+
+async function runStartupSync() {
+  await runOperationalSync();
+  await runDailySync();
 }
 
 async function checkConnections() {
@@ -105,6 +116,8 @@ function responseBody() {
     lastSyncError: state.lastSyncError,
     lastDailySyncAt: state.lastDailySyncAt,
     lastDailySyncError: state.lastDailySyncError,
+    operationalSyncRunning: state.operationalSyncRunning,
+    dailySyncRunning: state.dailySyncRunning,
   };
 }
 
@@ -128,7 +141,9 @@ if (config.runtime.schedulerEnabled) {
   const interval = Math.max(1, config.runtime.healthIntervalMinutes) * 60000;
   setInterval(() => void checkConnections(), interval).unref();
   if (config.runtime.syncEnabled) {
-    setTimeout(() => void runOperationalSync(), 15000).unref();
+    // Render 重启可能发生在凌晨任务之后。启动时先补订单/售后/库存，再补商品、利润和工资草稿，
+    // 保证当天数据不会因为服务重启而一直等到第二天凌晨。
+    setTimeout(() => void runStartupSync(), 15000).unref();
     setInterval(() => void runOperationalSync(), 60 * 60000).unref();
     setInterval(() => {
       const china = new Intl.DateTimeFormat("en-CA", {
