@@ -83,12 +83,15 @@ export class KdzsClient {
   async listAll(method, params = {}, pageSize = 200) {
     const output = [];
     let pageNo = 1;
+    let expectedTotal = null;
     while (true) {
       const data = await this.call(method, { ...params, pageNo, pageSize });
       const list = data?.list || [];
       output.push(...list);
-      const total = Number(data?.total ?? output.length);
-      if (!list.length || output.length >= total || list.length < pageSize) break;
+      const reportedTotal = Number(data?.total);
+      if (expectedTotal === null && Number.isFinite(reportedTotal) && reportedTotal >= 0) expectedTotal = reportedTotal;
+      if (!list.length || (expectedTotal !== null && output.length >= expectedTotal)) break;
+      if (pageNo >= 10000) throw new Error(`${method} 分页超过安全上限`);
       pageNo += 1;
     }
     return output;

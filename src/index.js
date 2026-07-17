@@ -3,6 +3,8 @@ import { FeishuClient } from "./feishu-client.js";
 import { KdzsClient } from "./kdzs-client.js";
 import { preparePayrollMonth, settlePreviousMonth } from "./payroll.js";
 import { SyncService } from "./sync-service.js";
+import { createKdzsFromSessionTable } from "./session-provider.js";
+import { NewBaseSyncService } from "./new-base-sync.js";
 
 const command = process.argv[2] || "sync";
 const requireKdzs = ["sync", "check"].includes(command);
@@ -13,7 +15,14 @@ try {
   const kdzs = requireKdzs ? new KdzsClient(config.kdzs) : null;
   const service = new SyncService({ kdzs, feishu, config });
   let result;
-  if (command === "migrate") result = await service.migrate();
+  if (["new-migrate", "new-sync", "new-daily"].includes(command)) {
+    const sessionClient = await createKdzsFromSessionTable(feishu, config);
+    const newService = new NewBaseSyncService({ feishu, kdzs: sessionClient, config });
+    if (command === "new-migrate") result = await newService.migrate();
+    else if (command === "new-sync") result = await newService.syncOperational();
+    else result = await newService.syncDaily();
+  }
+  else if (command === "migrate") result = await service.migrate();
   else if (command === "payroll") {
     const draft = await preparePayrollMonth(feishu);
     const settlement = await settlePreviousMonth(feishu, {

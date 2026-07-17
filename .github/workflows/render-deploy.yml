@@ -78,6 +78,22 @@ jobs:
             deploy_id=$(echo "$created" | jq -r '.deployId')
             service_url=$(echo "$created" | jq -r '.service.serviceDetails.url')
           else
+            env_payload=$(jq -n \
+              --arg app_id "$FEISHU_APP_ID" \
+              --arg app_secret "$FEISHU_APP_SECRET" \
+              --arg base_token "$FEISHU_BASE_TOKEN" \
+              '[
+                {key:"FEISHU_APP_ID",value:$app_id},
+                {key:"FEISHU_APP_SECRET",value:$app_secret},
+                {key:"FEISHU_BASE_TOKEN",value:$base_token},
+                {key:"FEISHU_SESSION_TABLE_ID",value:"tblDvIDJSSxHqKj8"},
+                {key:"SCHEDULER_ENABLED",value:"true"},
+                {key:"SYNC_ENABLED",value:"true"},
+                {key:"HEALTH_INTERVAL_MINUTES",value:"10"},
+                {key:"PROFIT_LOOKBACK_DAYS",value:"45"},
+                {key:"TZ",value:"Asia/Shanghai"}
+              ]')
+            api -X PUT -d "$env_payload" "https://api.render.com/v1/services/$service_id/env-vars" >/dev/null
             deployed=$(api -X POST -d '{}' "https://api.render.com/v1/services/$service_id/deploys")
             deploy_id=$(echo "$deployed" | jq -r '.id')
             details=$(api "https://api.render.com/v1/services/$service_id")

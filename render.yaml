@@ -16,4 +16,4 @@ services:
       - key: SCHEDULER_ENABLED
         value: "true"
       - key: SYNC_ENABLED
-        value: "false"
+        value: "true"

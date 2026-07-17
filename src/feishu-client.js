@@ -46,6 +46,20 @@ export class FeishuClient {
     return `/bitable/v1/apps/${this.config.baseToken}/tables/${tableId}${suffix}`;
   }
 
+  async listTables() {
+    const data = await this.request("GET", `/bitable/v1/apps/${this.config.baseToken}/tables?page_size=100`);
+    return data.items || [];
+  }
+
+  async ensureTable(name, fields) {
+    const existing = (await this.listTables()).find((table) => table.name === name);
+    if (existing) return existing;
+    const data = await this.request("POST", `/bitable/v1/apps/${this.config.baseToken}/tables`, {
+      table: { name, default_view_name: "表格", fields },
+    });
+    return data.table || data;
+  }
+
   async listFields(tableId) {
     const data = await this.request("GET", this.tablePath(tableId, "/fields?page_size=100"));
     return data.items || [];

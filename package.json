@@ -11,6 +11,9 @@
     "payroll": "node src/index.js payroll",
     "migrate": "node src/index.js migrate",
     "check": "node src/index.js check",
+    "new:migrate": "node src/index.js new-migrate",
+    "new:sync": "node src/index.js new-sync",
+    "new:daily": "node src/index.js new-daily",
     "test": "node --test"
   },
   "engines": {
