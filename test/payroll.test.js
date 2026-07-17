@@ -20,6 +20,7 @@ test("人员表调整底薪和提成后自动刷新待结算工资", async () =>
   const feishu = {
     listRecords: async (tableId) => tableId === "people" ? [{ fields: {
       "姓名": "主播A", "所属店铺": "店铺A", "基本工资": 7000, "提成百分比": 0.05, "在职状态": "在职",
+      "参与工资结算": "是",
     } }] : [{ record_id: "payroll-1", fields: {
       "姓名": "主播A", "月份": Date.parse("2026-07-01T00:00:00+08:00"), "店铺": "旧店铺",
       "基本工资": 6000, "提成比例": 0.03, "绩效工资": 500, "结算状态": "待结算",
@@ -30,7 +31,10 @@ test("人员表调整底薪和提成后自动刷新待结算工资", async () =>
   const service = new NewPayrollService({ feishu, tables: { people: { id: "people" }, payrollSettlement: { id: "payroll" } } });
   const result = await service.prepareMonth("2026-07");
   assert.equal(result.updated, 1);
-  assert.deepEqual(updates[0].fields, { "店铺": "店铺A", "基本工资": 7000, "提成比例": 0.05 });
+  assert.equal(updates[0].fields["店铺"], "店铺A");
+  assert.equal(updates[0].fields["基本工资"], 7000);
+  assert.equal(updates[0].fields["提成比例"], 0.05);
+  assert.equal(updates[0].fields["参与结算"], "是");
 });
 
 test("人员表调整不会改动已结算工资快照", async () => {
@@ -38,6 +42,7 @@ test("人员表调整不会改动已结算工资快照", async () => {
   const feishu = {
     listRecords: async (tableId) => tableId === "people" ? [{ fields: {
       "姓名": "主播A", "所属店铺": "店铺A", "基本工资": 8000, "提成百分比": 0.08,
+      "参与工资结算": "是",
     } }] : [{ record_id: "payroll-1", fields: {
       "姓名": "主播A", "月份": Date.parse("2026-07-01T00:00:00+08:00"), "店铺": "店铺A",
       "基本工资": 6000, "提成比例": 0.03, "结算状态": "已结算",

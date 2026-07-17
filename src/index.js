@@ -16,16 +16,21 @@ try {
   const kdzs = requireKdzs ? new KdzsClient(config.kdzs) : null;
   const service = new SyncService({ kdzs, feishu, config });
   let result;
-  if (["new-migrate", "new-sync", "new-daily", "new-payroll", "new-profit"].includes(command)) {
+  if (["new-migrate", "new-sync", "new-daily", "new-payroll", "new-profit", "new-backfill"].includes(command)) {
     const sessionClient = await createKdzsFromSessionTable(feishu, config);
     const newService = new NewBaseSyncService({ feishu, kdzs: sessionClient, config });
     if (command === "new-migrate") result = await newService.migrate();
-    else if (command === "new-sync") result = await newService.syncOperational();
-    else if (command === "new-daily") result = await newService.syncDaily();
-    else if (command === "new-profit") result = await newService.syncProfit();
+    else if (command === "new-sync") result = await newService.executeLogged("小时同步", () => newService.syncOperational());
+    else if (command === "new-daily") result = await newService.executeLogged("日同步", () => newService.syncDaily());
+    else if (command === "new-profit") result = await newService.executeLogged("利润同步", () => newService.syncProfit());
+    else if (command === "new-backfill") {
+      const start = process.argv.find((arg) => arg.startsWith("--start="))?.slice(8) || config.sync.startDate;
+      const end = process.argv.find((arg) => arg.startsWith("--end="))?.slice(6) || undefined;
+      result = await newService.executeLogged("历史全量回填", () => newService.syncBackfill({ startDate: start, endDate: end || undefined }));
+    }
     else {
       const tables = await newService.migrate();
-      const payrollService = new NewPayrollService({ feishu, tables });
+      const payrollService = new NewPayrollService({ feishu, tables, config });
       const now = new Date();
       const parts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit" }).formatToParts(now);
       const getPart = (type) => parts.find((part) => part.type === type)?.value;

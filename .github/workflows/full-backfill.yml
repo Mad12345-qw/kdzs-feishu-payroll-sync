@@ -1,0 +1,38 @@
+name: Full ERP backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "ERP 历史回填开始日期"
+        required: true
+        default: "2026-06-01"
+      end_date:
+        description: "ERP 历史回填结束日期，留空表示今天"
+        required: false
+        default: ""
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm test
+      - name: Run full backfill
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          FEISHU_BASE_TOKEN: ${{ secrets.FEISHU_BASE_TOKEN }}
+          FEISHU_SESSION_TABLE_ID: tblDvIDJSSxHqKj8
+          SYNC_START_DATE: ${{ inputs.start_date }}
+          SCHEDULER_ENABLED: "false"
+          SYNC_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          args=(new-backfill "--start=${{ inputs.start_date }}")
+          if [ -n "${{ inputs.end_date }}" ]; then args+=("--end=${{ inputs.end_date }}"); fi
+          node src/index.js "${args[@]}"

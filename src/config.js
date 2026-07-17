@@ -45,7 +45,9 @@ export function getConfig({ requireKdzs = true } = {}) {
       orderLookbackDays: integer("ORDER_LOOKBACK_DAYS", 3),
       refundLookbackDays: integer("REFUND_LOOKBACK_DAYS", 45),
       profitLookbackDays: integer("PROFIT_LOOKBACK_DAYS", 45),
+      profitDetailLookbackDays: integer("PROFIT_DETAIL_LOOKBACK_DAYS", 3),
       payrollSettlementDay: integer("PAYROLL_SETTLEMENT_DAY", 15),
+      expectedPayrollStoreCount: integer("EXPECTED_PAYROLL_STORE_COUNT", 2),
     },
     runtime: {
       port: integer("PORT", 3000),

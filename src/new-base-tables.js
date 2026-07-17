@@ -9,5 +9,7 @@ export const NEW_TABLES = {
   stock: { name: "库存表2", id: "tblNGybtf4lqeGlc" },
   profitRaw: { name: "利润汇总表", id: "tblbK10opjG2qdzq" },
   storeProfit: { name: "店铺利润表", id: "tbljQOOjrWpbftXQ" },
+  productProfit: { name: "商品利润明细表", id: "tblwBi6F6EQvc1sR" },
+  orderProfit: { name: "订单利润明细表", id: "tbl6kdMzAcInaeXl" },
   payroll: { name: "人员薪资表", id: "tblAbMeZIDuZafY9" },
 };

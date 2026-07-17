@@ -4,6 +4,7 @@ import { FeishuClient } from "./feishu-client.js";
 import { createKdzsFromSessionTable } from "./session-provider.js";
 import { NewBaseSyncService } from "./new-base-sync.js";
 import { NewPayrollService } from "./new-payroll.js";
+import { previousMonth } from "./utils.js";
 
 const config = getConfig({ requireKdzs: false });
 const feishu = new FeishuClient(config.feishu);
@@ -30,18 +31,20 @@ let dailyRunning = false;
 let lastDailyDate = "";
 
 async function runOperationalSync() {
-  if (!config.runtime.syncEnabled || syncRunning) return;
+  if (!config.runtime.syncEnabled || syncRunning || dailyRunning) return false;
   syncRunning = true;
   state.operationalSyncRunning = true;
   try {
     const kdzs = await createKdzsFromSessionTable(feishu, config);
     const service = new NewBaseSyncService({ feishu, kdzs, config });
-    await service.syncOperational();
+    await service.executeLogged("小时同步", () => service.syncOperational());
     state.lastSyncAt = new Date().toISOString();
     state.lastSyncError = null;
+    return true;
   } catch (error) {
     state.lastSyncError = error.message;
     console.error(error);
+    return false;
   } finally {
     syncRunning = false;
     state.operationalSyncRunning = false;
@@ -49,20 +52,28 @@ async function runOperationalSync() {
 }
 
 async function runDailySync() {
-  if (!config.runtime.syncEnabled || dailyRunning) return;
+  if (!config.runtime.syncEnabled || dailyRunning || syncRunning) return false;
   dailyRunning = true;
   state.dailySyncRunning = true;
   try {
     const kdzs = await createKdzsFromSessionTable(feishu, config);
     const service = new NewBaseSyncService({ feishu, kdzs, config });
-    await service.syncDaily({ profitLookbackDays: config.sync.profitLookbackDays });
-    const payroll = new NewPayrollService({ feishu, tables: service.tables });
+    await service.executeLogged("日同步", () => service.syncDaily({
+      profitLookbackDays: config.sync.profitLookbackDays,
+      profitDetailLookbackDays: config.sync.profitDetailLookbackDays,
+    }));
+    const previous = previousMonth(new Date());
+    const reconciliation = await service.reconcileMonth(previous);
+    const payroll = new NewPayrollService({ feishu, tables: service.tables, config });
     const monthParts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit" }).formatToParts(new Date());
     const part = (type) => monthParts.find((item) => item.type === type)?.value;
-    await payroll.prepareMonth(`${part("year")}-${part("month")}`);
-    await payroll.settlePreviousMonth({ settlementDay: config.sync.payrollSettlementDay });
+    const currentMonth = `${part("year")}-${part("month")}`;
+    await payroll.prepareMonth(currentMonth);
+    await payroll.refreshPerformance(currentMonth);
+    const settlement = await payroll.settlePreviousMonth({ settlementDay: config.sync.payrollSettlementDay });
+    await payroll.refreshPerformance(previous);
     state.lastDailySyncAt = new Date().toISOString();
-    state.lastDailySyncError = null;
+    state.lastDailySyncError = settlement.blocked || !reconciliation.passed ? (settlement.reason || "月度利润对账未通过，工资结算已阻断") : null;
   } catch (error) {
     state.lastDailySyncError = error.message;
     console.error(error);
@@ -73,8 +84,7 @@ async function runDailySync() {
 }
 
 async function runStartupSync() {
-  await runOperationalSync();
-  await runDailySync();
+  if (await runOperationalSync()) await runDailySync();
 }
 
 async function checkConnections() {
@@ -151,7 +161,7 @@ if (config.runtime.schedulerEnabled) {
       }).formatToParts(new Date());
       const get = (type) => china.find((part) => part.type === type)?.value;
       const today = `${get("year")}-${get("month")}-${get("day")}`;
-      if (get("hour") === "02" && lastDailyDate !== today) {
+      if (get("hour") === "02" && lastDailyDate !== today && !syncRunning && !dailyRunning) {
         lastDailyDate = today;
         void runDailySync();
       }
