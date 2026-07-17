@@ -3,6 +3,7 @@ import { getConfig } from "./config.js";
 import { FeishuClient } from "./feishu-client.js";
 import { createKdzsFromSessionTable } from "./session-provider.js";
 import { NewBaseSyncService } from "./new-base-sync.js";
+import { NewPayrollService } from "./new-payroll.js";
 
 const config = getConfig({ requireKdzs: false });
 const feishu = new FeishuClient(config.feishu);
@@ -50,6 +51,11 @@ async function runDailySync() {
     const kdzs = await createKdzsFromSessionTable(feishu, config);
     const service = new NewBaseSyncService({ feishu, kdzs, config });
     await service.syncDaily({ profitLookbackDays: config.sync.profitLookbackDays });
+    const payroll = new NewPayrollService({ feishu, tables: service.tables });
+    const monthParts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit" }).formatToParts(new Date());
+    const part = (type) => monthParts.find((item) => item.type === type)?.value;
+    await payroll.prepareMonth(`${part("year")}-${part("month")}`);
+    await payroll.settlePreviousMonth({ settlementDay: config.sync.payrollSettlementDay });
     state.lastDailySyncAt = new Date().toISOString();
     state.lastDailySyncError = null;
   } catch (error) {

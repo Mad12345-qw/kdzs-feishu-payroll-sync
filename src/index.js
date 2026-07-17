@@ -5,6 +5,7 @@ import { preparePayrollMonth, settlePreviousMonth } from "./payroll.js";
 import { SyncService } from "./sync-service.js";
 import { createKdzsFromSessionTable } from "./session-provider.js";
 import { NewBaseSyncService } from "./new-base-sync.js";
+import { NewPayrollService } from "./new-payroll.js";
 
 const command = process.argv[2] || "sync";
 const requireKdzs = ["sync", "check"].includes(command);
@@ -15,12 +16,25 @@ try {
   const kdzs = requireKdzs ? new KdzsClient(config.kdzs) : null;
   const service = new SyncService({ kdzs, feishu, config });
   let result;
-  if (["new-migrate", "new-sync", "new-daily"].includes(command)) {
+  if (["new-migrate", "new-sync", "new-daily", "new-payroll", "new-profit"].includes(command)) {
     const sessionClient = await createKdzsFromSessionTable(feishu, config);
     const newService = new NewBaseSyncService({ feishu, kdzs: sessionClient, config });
     if (command === "new-migrate") result = await newService.migrate();
     else if (command === "new-sync") result = await newService.syncOperational();
-    else result = await newService.syncDaily();
+    else if (command === "new-daily") result = await newService.syncDaily();
+    else if (command === "new-profit") result = await newService.syncProfit();
+    else {
+      const tables = await newService.migrate();
+      const payrollService = new NewPayrollService({ feishu, tables });
+      const now = new Date();
+      const parts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit" }).formatToParts(now);
+      const getPart = (type) => parts.find((part) => part.type === type)?.value;
+      const draft = await payrollService.prepareMonth(`${getPart("year")}-${getPart("month")}`);
+      const settlement = await payrollService.settlePreviousMonth({
+        settlementDay: config.sync.payrollSettlementDay, force: process.argv.includes("--force"),
+      });
+      result = { draft, settlement };
+    }
   }
   else if (command === "migrate") result = await service.migrate();
   else if (command === "payroll") {
