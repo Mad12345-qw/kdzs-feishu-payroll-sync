@@ -1,0 +1,23 @@
+name: Check Render API
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Render API
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          set -euo pipefail
+          owners=$(curl --fail --silent --show-error -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" "https://api.render.com/v1/owners?limit=20")
+          services=$(curl --fail --silent --show-error -H "Authorization: Bearer $RENDER_API_KEY" -H "Accept: application/json" "https://api.render.com/v1/services?limit=100")
+          owner_count=$(echo "$owners" | jq 'length')
+          service_count=$(echo "$services" | jq 'length')
+          echo "RENDER_API_OK=true"
+          echo "OWNER_COUNT=$owner_count"
+          echo "SERVICE_COUNT=$service_count"
+          echo "## Render API check" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API: connected" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Workspaces: $owner_count" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Services: $service_count" >> "$GITHUB_STEP_SUMMARY"
