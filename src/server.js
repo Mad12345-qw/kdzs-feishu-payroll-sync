@@ -76,6 +76,9 @@ async function runDailySync() {
     const settlement = today === config.sync.payrollSettlementDay ? await service.settlePayroll(previous) : { blocked: false };
     state.lastDailySyncAt = new Date().toISOString();
     state.lastDailySyncError = settlement.blocked ? "月度利润对账未通过，工资结算已阻断" : null;
+    // A startup catch-up can finish during the 02:00 scheduler window.
+    // Mark a successful run for the China calendar day so it is not launched again.
+    lastDailyDate = dateOnly();
   } catch (error) {
     state.lastDailySyncError = error.message;
     console.error(error);
