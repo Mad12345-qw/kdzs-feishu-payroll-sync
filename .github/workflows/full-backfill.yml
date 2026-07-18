@@ -11,6 +11,10 @@ on:
         description: "ERP 历史回填结束日期，留空表示今天"
         required: false
         default: ""
+      mode:
+        description: "full=全量，logistics=仅物流，reference=库存/商品快照，reconcile=利润对账，prepare-payroll=生成工资表，settle-payroll=结算工资"
+        required: true
+        default: "full"
 
 jobs:
   backfill:
@@ -34,4 +38,12 @@ jobs:
           SYNC_ENABLED: "false"
         run: |
           set -euo pipefail
-          node src/index.js delivery-backfill "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}"
+          case "${{ inputs.mode }}" in
+            full) node src/index.js delivery-backfill "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}" ;;
+            logistics) node src/index.js delivery-backfill-logistics "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}" ;;
+            reference) node src/index.js delivery-reference ;;
+            reconcile) node src/index.js delivery-reconcile "--month=${{ inputs.start_date }}" ;;
+            prepare-payroll) node src/index.js delivery-prepare-payroll "--month=${{ inputs.start_date }}" ;;
+            settle-payroll) node src/index.js delivery-settle-payroll "--month=${{ inputs.start_date }}" ;;
+            *) echo "Unsupported mode"; exit 2 ;;
+          esac
