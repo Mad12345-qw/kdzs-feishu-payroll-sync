@@ -9,7 +9,9 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: FEISHU_BASE_TOKEN
+      - key: DELIVERY_BASE_TOKEN
+        value: BvszbBG1yaPKm6sXE7IcEK9dnoe
+      - key: ERP_SOURCE_BASE_TOKEN
         value: LJB0bAyHFaTJ09sooPactc2xn4e
       - key: FEISHU_SESSION_TABLE_ID
         value: tblDvIDJSSxHqKj8

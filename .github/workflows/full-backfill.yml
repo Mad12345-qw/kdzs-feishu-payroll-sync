@@ -26,13 +26,12 @@ jobs:
         env:
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-          FEISHU_BASE_TOKEN: ${{ secrets.FEISHU_BASE_TOKEN }}
+          DELIVERY_BASE_TOKEN: BvszbBG1yaPKm6sXE7IcEK9dnoe
+          ERP_SOURCE_BASE_TOKEN: LJB0bAyHFaTJ09sooPactc2xn4e
           FEISHU_SESSION_TABLE_ID: tblDvIDJSSxHqKj8
           SYNC_START_DATE: ${{ inputs.start_date }}
           SCHEDULER_ENABLED: "false"
           SYNC_ENABLED: "false"
         run: |
           set -euo pipefail
-          args=(new-backfill "--start=${{ inputs.start_date }}")
-          if [ -n "${{ inputs.end_date }}" ]; then args+=("--end=${{ inputs.end_date }}"); fi
-          node src/index.js "${args[@]}"
+          node src/index.js delivery-backfill "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}"

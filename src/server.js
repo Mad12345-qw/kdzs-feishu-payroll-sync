@@ -4,10 +4,12 @@ import { FeishuClient } from "./feishu-client.js";
 import { createKdzsFromSessionTable } from "./session-provider.js";
 import { NewBaseSyncService } from "./new-base-sync.js";
 import { NewPayrollService } from "./new-payroll.js";
-import { previousMonth } from "./utils.js";
+import { DeliverySyncService } from "./delivery-sync.js";
+import { addDays, dateOnly, previousMonth } from "./utils.js";
 
 const config = getConfig({ requireKdzs: false });
 const feishu = new FeishuClient(config.feishu);
+const sourceFeishu = new FeishuClient({ ...config.feishu, baseToken: config.feishu.sourceBaseToken });
 const state = {
   startedAt: new Date().toISOString(),
   schedulerEnabled: config.runtime.schedulerEnabled,
@@ -35,9 +37,15 @@ async function runOperationalSync() {
   syncRunning = true;
   state.operationalSyncRunning = true;
   try {
-    const kdzs = await createKdzsFromSessionTable(feishu, config);
-    const service = new NewBaseSyncService({ feishu, kdzs, config });
-    await service.executeLogged("小时同步", () => service.syncOperational());
+    const kdzs = await createKdzsFromSessionTable(sourceFeishu, config);
+    const service = new DeliverySyncService({ feishu, kdzs });
+    const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+    const part = (type) => parts.find((item) => item.type === type)?.value;
+    const today = `${part("year")}-${part("month")}-${part("day")}`;
+    // 三天回看覆盖迟到的退款/订单状态；同一唯一键只更新，不重复新增。
+    for (const day of [addDays(new Date(`${today}T00:00:00+08:00`), -2), addDays(new Date(`${today}T00:00:00+08:00`), -1), new Date(`${today}T00:00:00+08:00`)]) {
+      await service.syncDay(dateOnly(day));
+    }
     state.lastSyncAt = new Date().toISOString();
     state.lastSyncError = null;
     return true;
@@ -56,24 +64,17 @@ async function runDailySync() {
   dailyRunning = true;
   state.dailySyncRunning = true;
   try {
-    const kdzs = await createKdzsFromSessionTable(feishu, config);
-    const service = new NewBaseSyncService({ feishu, kdzs, config });
-    await service.executeLogged("日同步", () => service.syncDaily({
-      profitLookbackDays: config.sync.profitLookbackDays,
-      profitDetailLookbackDays: config.sync.profitDetailLookbackDays,
-    }));
+    const kdzs = await createKdzsFromSessionTable(sourceFeishu, config);
+    const service = new DeliverySyncService({ feishu, kdzs });
     const previous = previousMonth(new Date());
-    const reconciliation = await service.reconcileMonth(previous);
-    const payroll = new NewPayrollService({ feishu, tables: service.tables, config });
     const monthParts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit" }).formatToParts(new Date());
     const part = (type) => monthParts.find((item) => item.type === type)?.value;
     const currentMonth = `${part("year")}-${part("month")}`;
-    await payroll.prepareMonth(currentMonth);
-    await payroll.refreshPerformance(currentMonth);
-    const settlement = await payroll.settlePreviousMonth({ settlementDay: config.sync.payrollSettlementDay });
-    await payroll.refreshPerformance(previous);
+    await service.preparePayroll(currentMonth);
+    const today = Number(part("day"));
+    const settlement = today === config.sync.payrollSettlementDay ? await service.settlePayroll(previous) : { blocked: false };
     state.lastDailySyncAt = new Date().toISOString();
-    state.lastDailySyncError = settlement.blocked || !reconciliation.passed ? (settlement.reason || "月度利润对账未通过，工资结算已阻断") : null;
+    state.lastDailySyncError = settlement.blocked ? "月度利润对账未通过，工资结算已阻断" : null;
   } catch (error) {
     state.lastDailySyncError = error.message;
     console.error(error);
@@ -93,7 +94,7 @@ async function checkConnections() {
   state.lastCheckAt = new Date().toISOString();
   try {
     const tables = await feishu.request("GET", `/bitable/v1/apps/${config.feishu.baseToken}/tables?page_size=100`);
-    const kdzs = await createKdzsFromSessionTable(feishu, config);
+    const kdzs = await createKdzsFromSessionTable(sourceFeishu, config);
     const stock = await kdzs.call("kdzs.erp.api.stock.list", { pageNo: 1, pageSize: 1 });
     state.baseTableCount = tables.total ?? tables.items?.length ?? 0;
     state.erpStockTotal = Number(stock.total || 0);

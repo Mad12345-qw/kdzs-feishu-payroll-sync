@@ -14,6 +14,11 @@
     "new:migrate": "node src/index.js new-migrate",
     "new:sync": "node src/index.js new-sync",
     "new:daily": "node src/index.js new-daily",
+    "delivery:sync-day": "node src/index.js delivery-sync-day",
+    "delivery:backfill": "node src/index.js delivery-backfill",
+    "delivery:reconcile": "node src/index.js delivery-reconcile",
+    "delivery:prepare-payroll": "node src/index.js delivery-prepare-payroll",
+    "delivery:settle-payroll": "node src/index.js delivery-settle-payroll",
     "new:payroll": "node src/index.js new-payroll",
     "new:profit": "node src/index.js new-profit",
     "test": "node --test"
