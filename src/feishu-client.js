@@ -90,10 +90,21 @@ export class FeishuClient {
   async ensureTable(name, fields) {
     const existing = (await this.listTables()).find((table) => table.name === name);
     if (existing) return existing;
-    const data = await this.request("POST", `/bitable/v1/apps/${this.config.baseToken}/tables`, {
-      table: { name, default_view_name: "表格", fields },
-    });
-    return data.table || data;
+    try {
+      const data = await this.request("POST", `/bitable/v1/apps/${this.config.baseToken}/tables`, {
+        table: { name, default_view_name: "表格", fields },
+      });
+      return data.table || data;
+    } catch (error) {
+      // 并发回填可能同时发现表不存在；另一任务成功建表后，复用该表而不是将正常竞争视为失败。
+      if (error.code !== 1254013) throw error;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await sleep(300 * (attempt + 1));
+        const created = (await this.listTables()).find((table) => table.name === name);
+        if (created) return created;
+      }
+      throw error;
+    }
   }
 
   async listFields(tableId) {
