@@ -92,6 +92,8 @@ try {
   else throw new Error(`未知命令：${command}`);
   console.log(JSON.stringify(result, null, 2));
   if (result?.results && Object.values(result.results).some((item) => item?.failed)) process.exitCode = 1;
+  // A reconciliation with any discrepancy is a hard failure, not a successful workflow execution.
+  if (command === "delivery-reconcile" && result?.passed === false) process.exitCode = 1;
 } catch (error) {
   console.error(JSON.stringify({ success: false, error: error.message, details: error.response }, null, 2));
   process.exitCode = 1;
