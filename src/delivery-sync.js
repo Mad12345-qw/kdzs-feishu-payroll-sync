@@ -231,7 +231,8 @@ export class DeliverySyncService {
       };
       for (const [dataType, write] of Object.entries(result)) {
         if (write.failed || write.created + write.updated !== write.total) {
-          throw new Error(`${day} ${dataType}写入不完整：成功${write.created + write.updated}/总计${write.total}，失败${write.failed}`);
+          const reason = write.failures?.[0]?.reason || "未返回具体原因";
+          throw new Error(`${day} ${dataType}写入不完整：成功${write.created + write.updated}/总计${write.total}，失败${write.failed}；${reason}`);
         }
       }
       await this.logDay(day, { "状态": "成功", "订单数": result.orders.total, "售后数": result.refunds.total, "店铺利润数": result.storeProfit.total, "商品利润数": result.productProfit.total });
