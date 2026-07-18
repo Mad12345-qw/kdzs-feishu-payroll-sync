@@ -29,7 +29,8 @@ export function getConfig({ requireKdzs = true } = {}) {
       appId: process.env.FEISHU_APP_ID,
       appSecret: process.env.FEISHU_APP_SECRET,
       // 业务和工资只写客户交付库；ERP session 只从技术库读取。
-      baseToken: process.env.DELIVERY_BASE_TOKEN || process.env.FEISHU_BASE_TOKEN || "BvszbBG1yaPKm6sXE7IcEK9dnoe",
+      // 禁止旧 FEISHU_BASE_TOKEN（历史上指向 LJB0）覆盖客户业务库。
+      baseToken: process.env.DELIVERY_BASE_TOKEN || "BvszbBG1yaPKm6sXE7IcEK9dnoe",
       sourceBaseToken: process.env.ERP_SOURCE_BASE_TOKEN || "LJB0bAyHFaTJ09sooPactc2xn4e",
       baseUrl: "https://open.feishu.cn/open-apis",
       requestTimeoutMs: integer("FEISHU_REQUEST_TIMEOUT_MS", 30000),
