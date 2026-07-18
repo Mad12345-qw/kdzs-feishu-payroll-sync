@@ -334,6 +334,13 @@ export class DeliverySyncService {
         "差额": diff, "覆盖天数": completedDays.size, "状态": Math.abs(diff) <= 0.01 ? "通过" : "不通过", "核对时间": Date.now() });
     }
     await this.upsert(this.tables.reconciliation, rows, "对账键");
+    // Remove stale rows left by a previous reconciliation run. A store no longer returned by ERP must not keep an old failure visible.
+    const activeKeys = new Set(rows.map((row) => row["\u5bf9\u8d26\u952e"]));
+    const obsoleteRecordIds = (await this.feishu.listRecords(this.tables.reconciliation.id))
+      .filter((record) => scalar(record.fields?.["\u6708\u4efd"]) === month)
+      .filter((record) => !activeKeys.has(scalar(record.fields?.["\u5bf9\u8d26\u952e"])))
+      .map((record) => record.record_id);
+    if (obsoleteRecordIds.length) await this.feishu.batchDelete(this.tables.reconciliation.id, obsoleteRecordIds);
     return { month, rows, passed: rows.length > 0 && rows.every((row) => row["状态"] === "通过") };
   }
 
