@@ -69,12 +69,18 @@ function halfMonthPartition(value) {
 }
 
 export class NewBaseSyncService {
+  static cachedTables = null;
+
   constructor({ feishu, kdzs, config, logger = console }) {
     this.feishu = feishu; this.kdzs = kdzs; this.config = config; this.logger = logger;
     this.tables = { ...NEW_TABLES };
   }
 
   async migrate() {
+    if (NewBaseSyncService.cachedTables) {
+      this.tables = { ...NewBaseSyncService.cachedTables };
+      return this.tables;
+    }
     const refunds = await this.feishu.ensureTable("售后表", [
       { field_name: "退款编号", type: 1 }, { field_name: "系统订单号", type: 1 }, { field_name: "平台订单号", type: 1 },
       { field_name: "店铺名称", type: 1 }, { field_name: "店铺ID", type: 1 }, { field_name: "平台", type: 1 },
@@ -208,6 +214,7 @@ export class NewBaseSyncService {
     )) {
       await this.feishu.batchUpdate(this.tables.payrollRules.id, [{ record_id: currentSettlementRule.record_id, fields: settlementRule }]);
     }
+    NewBaseSyncService.cachedTables = { ...this.tables };
     return this.tables;
   }
 
