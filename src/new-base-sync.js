@@ -277,8 +277,26 @@ export class NewBaseSyncService {
       }
       for (const [half, halfRows] of halves) {
         const split = await this.writeOperationalPartition(`${prefix}_${month}_${half}`, halfRows);
-        if (split.overLimit) throw new Error(`${prefix}_${month}_${half}超过15000条安全阈值，需要继续按日拆分`);
-        results.push({ partition: `${month}_${half}`, ...split });
+        if (!split.overLimit) {
+          results.push({ partition: `${month}_${half}`, ...split });
+          continue;
+        }
+        if (split.existingRows.length) {
+          const updates = await this.writeOperationalPartition(`${prefix}_${month}_${half}`, split.existingRows);
+          if (updates.overLimit || updates.failed) throw new Error(`${prefix}_${month}_${half}已有记录更新失败`);
+          results.push({ partition: `${month}_${half}`, ...updates });
+        }
+        const days = new Map();
+        for (const row of split.newRows) {
+          const day = partitionDate(row[dateField]);
+          if (!days.has(day)) days.set(day, []);
+          days.get(day).push(row);
+        }
+        for (const [day, dayRows] of days) {
+          const daily = await this.writeOperationalPartition(`${prefix}_${day}`, dayRows);
+          if (daily.overLimit) throw new Error(`${prefix}_${day}超过15000条安全阈值，需要进一步按店铺拆分`);
+          results.push({ partition: day, ...daily });
+        }
       }
     }
     return { partitions: results };
