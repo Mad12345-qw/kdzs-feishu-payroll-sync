@@ -239,14 +239,25 @@ export class NewBaseSyncService {
     if (!rows.length) return { total: 0, created: 0, updated: 0, failed: 0, failures: [], overLimit: false, existingRows: [], newRows: [] };
     const table = await this.ensurePartitionTable(name, rows);
     const existing = await this.feishu.listRecords(table.id);
-    const existingKeys = new Set(existing.map((record) => fieldText(record.fields?.["同步唯一键"])).filter(Boolean));
-    const existingRows = rows.filter((row) => existingKeys.has(fieldText(row["同步唯一键"])));
-    const newRows = rows.filter((row) => !existingKeys.has(fieldText(row["同步唯一键"])));
+    const existingByKey = new Map(existing.map((record) => [fieldText(record.fields?.["同步唯一键"]), record.record_id]).filter(([key]) => key));
+    const existingRows = rows.filter((row) => existingByKey.has(fieldText(row["同步唯一键"])));
+    const newRows = rows.filter((row) => !existingByKey.has(fieldText(row["同步唯一键"])));
     if (existing.length + newRows.length > maxRecords) {
       return { total: rows.length, created: 0, updated: 0, failed: 0, failures: [], overLimit: true, existingRows, newRows };
     }
-    const write = await this.feishu.upsert(table.id, this.stamp(rows), { legacyKey: (fields) => fields["同步唯一键"] });
-    return { ...write, overLimit: false, existingRows: [], newRows: [] };
+    const stamped = this.stamp(rows);
+    const createRows = stamped.filter((row) => !existingByKey.has(fieldText(row["同步唯一键"])));
+    const updateRows = stamped.filter((row) => existingByKey.has(fieldText(row["同步唯一键"]))).map((fields) => ({
+      record_id: existingByKey.get(fieldText(fields["同步唯一键"])), fields,
+    }));
+    const create = await this.feishu.batchCreateSafe(table.id, createRows);
+    const update = await this.feishu.batchUpdateSafe(table.id, updateRows);
+    const failures = [
+      ...create.failures.map((failure) => ({ operation: "create", ...failure })),
+      ...update.failures.map((failure) => ({ operation: "update", ...failure })),
+    ];
+    return { total: rows.length, created: create.succeeded.length, updated: update.succeeded.length,
+      failed: failures.length, failures, overLimit: false, existingRows: [], newRows: [] };
   }
 
   async upsertOperationalPartitions(prefix, rows, dateField) {
@@ -650,36 +661,29 @@ export class NewBaseSyncService {
   async syncBackfill({ startDate = this.config.sync.startDate, endDate = dateOnly(new Date()) } = {}) {
     await this.migrate();
     const start = new Date(`${startDate}T00:00:00+08:00`); const end = new Date(`${endDate}T23:59:59+08:00`);
-    const results = { periods: [], refunds: null, profit: null };
-    for (const [periodStart, periodEnd, period] of halfMonthRanges(start, end)) {
-      const trades = []; const logistics = []; const orderProfit = []; const productProfit = [];
-      for (const [from, to] of dateChunks(periodStart, periodEnd, 7)) {
-        const range = { startTime: startOfDayString(from), endTime: endOfDayString(to) };
-        trades.push(...await this.kdzs.listAll("kdzs.erp.api.trade.list", { timeType: "CREATE_TIME", ...range }, 200));
-        logistics.push(...await this.kdzs.listAll("kdzs.erp.api.report.logistics", { sendTimeStart: range.startTime, sendTimeEnd: range.endTime }, 200));
-      }
-      for (const [day] of dateChunks(periodStart, periodEnd, 1)) {
-        const range = { queryTimeType: 3, startTime: startOfDayString(day), endTime: endOfDayString(day) };
-        orderProfit.push(...mapOrderProfit(await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { ...range, queryGroupType: 7 }), dateOnly(day)));
-        productProfit.push(...mapProductProfit(await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { ...range, queryGroupType: 8 }), dateOnly(day)));
-      }
-      const periodResult = {
-        period,
+    const results = { days: [], profit: null };
+    for (const [day] of dateChunks(start, end, 1)) {
+      const dayText = dateOnly(day);
+      const operationalRange = { startTime: startOfDayString(day), endTime: endOfDayString(day) };
+      const profitRange = { queryTimeType: 3, ...operationalRange };
+      const trades = await this.kdzs.listAll("kdzs.erp.api.trade.list", { timeType: "CREATE_TIME", ...operationalRange }, 200);
+      const logistics = await this.kdzs.listAll("kdzs.erp.api.report.logistics", { sendTimeStart: operationalRange.startTime, sendTimeEnd: operationalRange.endTime }, 200);
+      const orderProfit = mapOrderProfit(await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { ...profitRange, queryGroupType: 7 }), dayText);
+      const productProfit = mapProductProfit(await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { ...profitRange, queryGroupType: 8 }), dayText);
+      const refunds = await this.kdzs.listAll("kdzs.erp.api.refund.list", { createTimeStart: operationalRange.startTime, createTimeEnd: operationalRange.endTime });
+      const dayResult = {
+        day: dayText,
         orders: await this.upsertOperationalPartitions("订单", mapNewOrders(trades), "created"),
         orderItems: await this.upsertOperationalPartitions("订单明细", mapNewOrderItems(trades), "created"),
         logistics: await this.upsertOperationalPartitions("物流", mapLogistics(logistics), "发货时间"),
         orderProfit: await this.upsertOperationalPartitions("订单利润", orderProfit, "date"),
         productProfit: await this.upsertOperationalPartitions("商品利润", productProfit, "date"),
+        refunds: await this.upsertOperationalPartitions("售后", mapNewRefunds(refunds), "创建时间"),
+        refundItems: await this.upsertOperationalPartitions("售后明细", mapNewRefundItems(refunds), "创建时间"),
       };
-      const stats = collectStats(periodResult, period); if (stats.failed) throw new Error(`${period}归档存在${stats.failed}条失败`);
-      results.periods.push(periodResult);
+      const stats = collectStats(dayResult, dayText); if (stats.failed) throw new Error(`${dayText}回填存在${stats.failed}条失败`);
+      results.days.push(dayResult);
     }
-    const refunds = [];
-    for (const [from, to] of dateChunks(start, end, 30)) refunds.push(...await this.kdzs.listAll("kdzs.erp.api.refund.list", { createTimeStart: startOfDayString(from), createTimeEnd: endOfDayString(to) }));
-    results.refunds = {
-      refunds: await this.upsertOperationalPartitions("售后", mapNewRefunds(refunds), "创建时间"),
-      refundItems: await this.upsertOperationalPartitions("售后明细", mapNewRefundItems(refunds), "创建时间"),
-    };
     results.profit = await this.syncProfit({ startDate: start.toISOString(), endDate: end.toISOString(), includeDetails: false,
       profitDetailLookbackDays: 0, skipMigrate: true });
     return results;
