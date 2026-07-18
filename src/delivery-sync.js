@@ -106,6 +106,49 @@ function mapRefunds(refunds) {
   return uniqueBy(rows, (row) => row[KEY]);
 }
 
+function mapLogistics(items) {
+  return uniqueBy(items.map((item) => ({
+    [KEY]: `${text(item.tid)}|${text(item.ydNo)}`, "订单号": text(item.tid), "运单号": text(item.ydNo),
+    "店铺名称": text(item.shopName), "平台类型": text(item.shopType || item.ptType), "快递公司编码": text(item.kdCode),
+    "快递公司名称": text(item.exCodeName), "发货时间": text(item.sendTime), "最新物流时间": text(item.lastTime),
+    "最新物流详情": text(item.lastDesc), "物流状态": text(item.logisticsYunStatusVal), "物流子状态": text(item.subLogisticsStatus),
+    "异常状态": number(item.abnormalStatus), "处理状态": number(item.dealStatus), "退款状态类型": text(item.refundStatusType),
+    "收货省": text(item.receiverProvince), "收货市": text(item.receiverCity), "收货区县": text(item.receiverCounty), [SYNC_TIME]: Date.now(),
+  })), (row) => row[KEY]);
+}
+
+function mapStock(items) {
+  return uniqueBy(items.map((item) => ({
+    [KEY]: text(item.sysSkuId), "系统商品ID": text(item.sysItemId), "系统SKU_ID": text(item.sysSkuId), "商品名称": text(item.sysItemName),
+    "SKU名称": text(item.sysSkuName), "SKU编码": text(item.skuOuterId), "商品编号": text(item.itemNo), "条形码": text(item.barCode),
+    "总库存": number(item.stockTotal), "可配货库存": number(item.salableItemDistributableStock), "预占数量": number(item.salableItemPreemptedNum),
+    "在途库存": number(item.transitItemStock), "退货待处理": number(item.refundStockWaitHandNum), [SYNC_TIME]: Date.now(),
+  })), (row) => row[KEY]);
+}
+
+function mapPlatformProducts(items) {
+  const rows = [];
+  for (const item of items) for (const sku of item.platformItemSkuList || []) rows.push({
+    [KEY]: `${text(item.numIid)}|${text(sku.skuId)}`, "商品ID": text(item.numIid), "商品标题": text(item.title), "审核状态": text(item.approveStatus),
+    "SKU_ID": text(sku.skuId), "SKU名称": text(sku.skuName), "SKU编码": text(sku.skuOuterId), "SKU价格": money(sku.price),
+    "SKU创建时间": text(sku.itemSkuCreateTime), "SKU图片": text(sku.skuPicUrl), "商品图片": text(item.itemPicUrl), "外部编码": text(item.outerId), [SYNC_TIME]: Date.now(),
+  });
+  return uniqueBy(rows, (row) => row[KEY]);
+}
+
+function mapErpProducts(items) {
+  const rows = [];
+  for (const item of items) for (const sku of item.skuList || []) rows.push({
+    [KEY]: `${text(item.sysItemId)}|${text(sku.sysSkuId)}`, "系统商品ID": text(item.sysItemId), "商品名称": text(item.sysItemName),
+    "商品编号": text(item.itemNo), "分类ID": text(item.classifyId), "分类名称": text(item.classifyName), "属性": text(item.property),
+    "创建时间": text(item.created), "修改时间": text(item.modified), "系统SKU_ID": text(sku.sysSkuId), "SKU名称": text(sku.sysSkuName),
+    "SKU编码": text(sku.skuOuterId), "SKU外部编码": text(sku.skuOuterId), "SKU创建时间": text(sku.created), "SKU修改时间": text(sku.modified),
+    "成本价": money(sku.costPrice), "价格": money(sku.price), "重量": number(sku.weight), "条形码": text(sku.barCode), "货位": text(sku.warehouseSlotName),
+    "颜色": text(sku.sysColor), "尺码": text(sku.sysSize), "外部编码": text(item.outerId), [SYNC_TIME]: Date.now(),
+  });
+  return uniqueBy(rows, (row) => row[KEY]);
+}
+
 export class DeliverySyncService {
   constructor({ feishu, kdzs, logger = console }) {
     this.feishu = feishu; this.kdzs = kdzs; this.logger = logger;
@@ -172,9 +215,10 @@ export class DeliverySyncService {
     await this.ensureSupportTables();
     const range = { startTime: startOfDayString(new Date(`${day}T00:00:00+08:00`)), endTime: endOfDayString(new Date(`${day}T00:00:00+08:00`)) };
     try {
-      const [trades, refunds, storeItems, productItems] = await Promise.all([
+      const [trades, refunds, logistics, storeItems, productItems] = await Promise.all([
         this.kdzs.listAll("kdzs.erp.api.trade.list", { timeType: "CREATE_TIME", ...range }, 200),
         this.kdzs.listAll("kdzs.erp.api.refund.list", { createTimeStart: range.startTime, createTimeEnd: range.endTime }, 200),
+        this.kdzs.listAll("kdzs.erp.api.report.logistics", { sendTimeStart: range.startTime, sendTimeEnd: range.endTime }, 200),
         this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 2, ...range }),
         this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 8, ...range }),
       ]);
@@ -183,6 +227,7 @@ export class DeliverySyncService {
         productProfit: await this.writePartition("03_商品利润明细", day, mapProductProfit(productItems, day)),
         orders: await this.writePartition("06_订单列表", day, mapOrders(trades)),
         refunds: await this.writePartition("07_售后列表", day, mapRefunds(refunds)),
+        logistics: await this.writePartition("08_物流列表", day, mapLogistics(logistics)),
       };
       await this.logDay(day, { "状态": "成功", "订单数": result.orders.total, "售后数": result.refunds.total, "店铺利润数": result.storeProfit.total, "商品利润数": result.productProfit.total });
       this.logger.info(JSON.stringify({ day, status: "success", ...Object.fromEntries(Object.entries(result).map(([key, value]) => [key, value.total])) }));
@@ -193,10 +238,40 @@ export class DeliverySyncService {
     }
   }
 
+  async syncReferenceData() {
+    await this.ensureSupportTables();
+    const [stock, platformProducts, erpProducts] = await Promise.all([
+      this.kdzs.listAll("kdzs.erp.api.stock.list"),
+      this.kdzs.listAll("kdzs.erp.api.platform.item.list", { returnSku: true }),
+      this.kdzs.listAll("kdzs.erp.api.sys.item.list", { needSkuDetail: true }),
+    ]);
+    return {
+      stock: await this.upsert(this.tables.stock, mapStock(stock)),
+      platformProducts: await this.upsert(this.tables.platformProducts, mapPlatformProducts(platformProducts)),
+      erpProducts: await this.upsert(this.tables.erpProducts, mapErpProducts(erpProducts)),
+    };
+  }
+
   async backfill({ startDate, endDate }) {
     const start = new Date(`${startDate}T00:00:00+08:00`); const end = new Date(`${endDate}T23:59:59+08:00`);
     const days = [];
     for (const [day] of dateChunks(start, end, 1)) days.push({ day: dateOnly(day), ...(await this.syncDay(dateOnly(day))) });
+    return { startDate, endDate, days };
+  }
+
+  async syncLogisticsDay(day) {
+    const date = new Date(`${day}T00:00:00+08:00`);
+    const rows = await this.kdzs.listAll("kdzs.erp.api.report.logistics", {
+      sendTimeStart: startOfDayString(date), sendTimeEnd: endOfDayString(date),
+    }, 200);
+    return this.writePartition("08_物流列表", day, mapLogistics(rows));
+  }
+
+  async backfillLogistics({ startDate, endDate }) {
+    const start = new Date(`${startDate}T00:00:00+08:00`); const end = new Date(`${endDate}T23:59:59+08:00`); const days = [];
+    for (const [day] of dateChunks(start, end, 1)) {
+      const dayText = dateOnly(day); days.push({ day: dayText, ...(await this.syncLogisticsDay(dayText)) });
+    }
     return { startDate, endDate, days };
   }
 

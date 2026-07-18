@@ -71,6 +71,7 @@ async function runDailySync() {
     const part = (type) => monthParts.find((item) => item.type === type)?.value;
     const currentMonth = `${part("year")}-${part("month")}`;
     await service.preparePayroll(currentMonth);
+    await service.syncReferenceData();
     const today = Number(part("day"));
     const settlement = today === config.sync.payrollSettlementDay ? await service.settlePayroll(previous) : { blocked: false };
     state.lastDailySyncAt = new Date().toISOString();
