@@ -12,7 +12,7 @@ on:
         required: false
         default: ""
       mode:
-        description: "full=全量，logistics=仅物流，reference=库存/商品快照，reconcile=利润对账，prepare-payroll=生成工资表，settle-payroll=结算工资"
+        description: "full=全量，profit=仅店铺利润，logistics=仅物流，reference=库存/商品快照，reconcile=利润对账，prepare-payroll=生成工资表，settle-payroll=结算工资"
         required: true
         default: "full"
 
@@ -40,6 +40,7 @@ jobs:
           set -euo pipefail
           case "${{ inputs.mode }}" in
             full) node src/index.js delivery-backfill "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}" ;;
+            profit) node src/index.js delivery-backfill-profit "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}" ;;
             logistics) node src/index.js delivery-backfill-logistics "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}" ;;
             reference) node src/index.js delivery-reference ;;
             reconcile) node src/index.js delivery-reconcile "--month=${{ inputs.start_date }}" ;;

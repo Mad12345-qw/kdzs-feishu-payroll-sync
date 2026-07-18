@@ -19,7 +19,7 @@ try {
   const kdzs = requireKdzs ? new KdzsClient(config.kdzs) : null;
   const service = new SyncService({ kdzs, feishu, config });
   let result;
-  if (["delivery-backfill", "delivery-backfill-logistics", "delivery-reference", "delivery-sync-day", "delivery-prepare-payroll", "delivery-settle-payroll", "delivery-reconcile"].includes(command)) {
+  if (["delivery-backfill", "delivery-backfill-logistics", "delivery-backfill-profit", "delivery-reference", "delivery-sync-day", "delivery-prepare-payroll", "delivery-settle-payroll", "delivery-reconcile"].includes(command)) {
     const sessionClient = await createKdzsFromSessionTable(sourceFeishu, config);
     const delivery = new DeliverySyncService({ feishu, kdzs: sessionClient });
     if (command === "delivery-sync-day") {
@@ -27,13 +27,13 @@ try {
       result = await delivery.syncDay(day);
     } else if (command === "delivery-reference") {
       result = await delivery.syncReferenceData();
-    } else if (command === "delivery-backfill" || command === "delivery-backfill-logistics") {
+    } else if (["delivery-backfill", "delivery-backfill-logistics", "delivery-backfill-profit"].includes(command)) {
       const startDate = process.argv.find((arg) => arg.startsWith("--start="))?.slice(8);
       const endDate = process.argv.find((arg) => arg.startsWith("--end="))?.slice(6);
       if (!startDate || !endDate) throw new Error("delivery-backfill 必须指定 --start 和 --end");
-      result = command === "delivery-backfill-logistics"
-        ? await delivery.backfillLogistics({ startDate, endDate })
-        : await delivery.backfill({ startDate, endDate });
+      result = command === "delivery-backfill-logistics" ? await delivery.backfillLogistics({ startDate, endDate })
+        : command === "delivery-backfill-profit" ? await delivery.backfillStoreProfit({ startDate, endDate })
+          : await delivery.backfill({ startDate, endDate });
     } else {
       const month = process.argv.find((arg) => arg.startsWith("--month="))?.slice(8) || previousMonth(new Date());
       if (command === "delivery-prepare-payroll") result = await delivery.preparePayroll(month);

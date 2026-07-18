@@ -266,6 +266,28 @@ export class DeliverySyncService {
     return { startDate, endDate, days };
   }
 
+  async syncStoreProfitDay(day) {
+    await this.ensureSupportTables();
+    const date = new Date(`${day}T00:00:00+08:00`);
+    const rows = await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", {
+      queryTimeType: 3, queryGroupType: 2, startTime: startOfDayString(date), endTime: endOfDayString(date),
+    });
+    const write = await this.upsert(this.tables.storeProfit, mapStoreProfit(rows, day));
+    if (write.failed || write.created + write.updated !== write.total) {
+      throw new Error(`${day} storeProfit写入不完整：成功${write.created + write.updated}/总计${write.total}，失败${write.failed}；${write.failures?.[0]?.reason || "未返回具体原因"}`);
+    }
+    this.logger.info(JSON.stringify({ day, status: "store-profit-rebuilt", total: write.total }));
+    return write;
+  }
+
+  async backfillStoreProfit({ startDate, endDate }) {
+    const start = new Date(`${startDate}T00:00:00+08:00`); const end = new Date(`${endDate}T23:59:59+08:00`); const days = [];
+    for (const [day] of dateChunks(start, end, 1)) {
+      const dayText = dateOnly(day); days.push({ day: dayText, ...(await this.syncStoreProfitDay(dayText)) });
+    }
+    return { startDate, endDate, days };
+  }
+
   async syncLogisticsDay(day) {
     const date = new Date(`${day}T00:00:00+08:00`);
     const rows = await this.kdzs.listAll("kdzs.erp.api.report.logistics", {
