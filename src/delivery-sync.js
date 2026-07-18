@@ -1,4 +1,4 @@
-import { addDays, dateChunks, dateOnly, endOfDayString, monthBounds, number, previousMonth, roundMoney, startOfDayString, text, uniqueBy } from "./utils.js";
+import { addDays, dateChunks, dateOnly, endOfDayString, monthBounds, number, parseLocalDate, previousMonth, roundMoney, startOfDayString, text, uniqueBy } from "./utils.js";
 
 // 客户交付库：只使用 Bvsz 内已有的业务表。LJB0 仅由 session-provider 读取 ERP 会话。
 export const DELIVERY_TABLES = {
@@ -306,7 +306,13 @@ export class DeliverySyncService {
 
   async reconcileMonth(month) {
     await this.ensureSupportTables();
-    const { start, end } = monthBounds(month);
+    const { start, end: monthEnd } = monthBounds(month);
+    const today = dateOnly(); const currentMonth = today.slice(0, 7);
+    if (month > currentMonth) throw new Error(`${month}尚未开始，不能对账或结算`);
+    // 当月只能核对到今天：未来日期不存在业务数据。完整月和当月暂估
+    // 都可核对，但只有完整月才允许进入工资结算。
+    const end = month === currentMonth ? parseLocalDate(today) : monthEnd;
+    const completeMonth = end.getTime() === monthEnd.getTime();
     const [profitRecords, logs] = await Promise.all([this.feishu.listRecords(this.tables.storeProfit.id), this.feishu.listRecords(this.tables.logs.id)]);
     const feishu = new Map(); const erp = new Map(); const completedDays = new Set();
     for (const record of logs) if (scalar(record.fields?.["状态"]) === "成功" && scalar(record.fields?.["日期"]).startsWith(month)) completedDays.add(scalar(record.fields?.["日期"]));
@@ -334,14 +340,15 @@ export class DeliverySyncService {
         "差额": diff, "覆盖天数": completedDays.size, "状态": Math.abs(diff) <= 0.01 ? "通过" : "不通过", "核对时间": Date.now() });
     }
     await this.upsert(this.tables.reconciliation, rows, "对账键");
-    // Remove stale rows left by a previous reconciliation run. A store no longer returned by ERP must not keep an old failure visible.
-    const activeKeys = new Set(rows.map((row) => row["\u5bf9\u8d26\u952e"]));
+    // Remove stale rows left by a previous reconciliation run. A store no
+    // longer returned by ERP must not keep an old failure visible.
+    const activeKeys = new Set(rows.map((row) => row["对账键"]));
     const obsoleteRecordIds = (await this.feishu.listRecords(this.tables.reconciliation.id))
-      .filter((record) => scalar(record.fields?.["\u6708\u4efd"]) === month)
-      .filter((record) => !activeKeys.has(scalar(record.fields?.["\u5bf9\u8d26\u952e"])))
+      .filter((record) => scalar(record.fields?.["月份"]) === month)
+      .filter((record) => !activeKeys.has(scalar(record.fields?.["对账键"])))
       .map((record) => record.record_id);
     if (obsoleteRecordIds.length) await this.feishu.batchDelete(this.tables.reconciliation.id, obsoleteRecordIds);
-    return { month, rows, passed: rows.length > 0 && rows.every((row) => row["状态"] === "通过") };
+    return { month, throughDate: dateOnly(end), completeMonth, rows, passed: rows.length > 0 && rows.every((row) => row["状态"] === "通过") };
   }
 
   async preparePayroll(month) {
@@ -361,6 +368,7 @@ export class DeliverySyncService {
   async settlePayroll(month = previousMonth(new Date())) {
     const reconciliation = await this.reconcileMonth(month);
     if (!reconciliation.passed) throw new Error(`${month}利润对账未通过，禁止工资结算`);
+    if (!reconciliation.completeMonth) throw new Error(`${month}尚未结束，只能生成暂估数据，禁止工资结算`);
     const records = await this.feishu.listRecords(this.tables.payroll.id); const updates = [];
     for (const record of records) {
       const fields = record.fields || {}; if (!sameMonth(fields["月份"], month) || scalar(fields["结算状态"]) === "已结算") continue;
