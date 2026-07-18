@@ -310,8 +310,15 @@ export class DeliverySyncService {
     const [profitRecords, logs] = await Promise.all([this.feishu.listRecords(this.tables.storeProfit.id), this.feishu.listRecords(this.tables.logs.id)]);
     const feishu = new Map(); const erp = new Map(); const completedDays = new Set();
     for (const record of logs) if (scalar(record.fields?.["状态"]) === "成功" && scalar(record.fields?.["日期"]).startsWith(month)) completedDays.add(scalar(record.fields?.["日期"]));
+    const latestProfitBySyncKey = new Map();
     for (const record of profitRecords) {
-      const fields = record.fields || {}; if (!sameMonth(fields["日期"], month)) continue;
+      const fields = record.fields || {}; const syncKey = scalar(fields[KEY]);
+      // 无同步键的是客户库历史遗留数据，不具备 ERP 来源证明，不能进入对账或工资基数。
+      if (!syncKey || !sameMonth(fields["日期"], month)) continue;
+      const previous = latestProfitBySyncKey.get(syncKey);
+      if (!previous || number(fields[SYNC_TIME]) >= number(previous[SYNC_TIME])) latestProfitBySyncKey.set(syncKey, fields);
+    }
+    for (const fields of latestProfitBySyncKey.values()) {
       const key = scalar(fields["店铺名称"]); feishu.set(key, money(feishu.get(key)) + money(fields["利润"]));
     }
     for (const [date] of dateChunks(start, end, 1)) {
