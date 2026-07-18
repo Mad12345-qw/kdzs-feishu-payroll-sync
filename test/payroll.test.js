@@ -55,3 +55,13 @@ test("人员表调整不会改动已结算工资快照", async () => {
   assert.equal(result.updated, 0);
   assert.equal(updateCount, 0);
 });
+
+test("人员表具备姓名、店铺、底薪和提成即可自动纳入工资结算", async () => {
+  const feishu = { listRecords: async () => [{ fields: {
+    "姓名": "主播A", "所属店铺": "店铺A", "基本工资": 6500, "提成百分比": 0.03, "在职状态": "在职",
+  } }] };
+  const service = new NewPayrollService({ feishu, tables: { people: { id: "people" } } });
+  const result = await service.participantCheck();
+  assert.equal(result.participants.length, 1);
+  assert.deepEqual(result.errors, []);
+});

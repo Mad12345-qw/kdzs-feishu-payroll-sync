@@ -21,7 +21,7 @@ export function mapNewOrderItems(trades) {
     skuUrl: text(item.skuUrl), sysSkuUrl: text(item.sysSkuUrl), sysOuterId: text(item.sysOuterId),
     sysOuterSkuId: text(item.sysOuterSkuId), sysSkuName: text(item.sysSkuName), sysItemName: text(item.sysItemName),
     sysItemId: text(item.sysItemId), sysSkuId: text(item.sysSkuId), skuProperties: text(item.skuProperties),
-    number: text(item.number), status: text(item.status), refundStatus: text(item.refundStatus),
+    number: text(item.number), status: text(item.status), refundStatus: text(item.refundStatus), created: text(trade.created), modified: text(trade.modified),
   });
   return uniqueBy(rows, (row) => row["同步唯一键"]);
 }
@@ -43,7 +43,7 @@ export function mapNewRefundItems(refunds) {
     "同步唯一键": `${text(refund.refundId)}|${text(item.outerSkuId)}|${text(item.title)}|${text(item.skuProperties)}`,
     "退款编号": text(refund.refundId), "商品标题": text(item.title), "规格名称": text(item.skuProperties),
     "商家编码": text(item.outerId), "规格编码": text(item.outerSkuId), "退款数量": number(item.refundNum),
-    "退款金额": number(item.refundAmount),
+    "退款金额": number(item.refundAmount), "创建时间": text(refund.refundCreatedTime), "修改时间": text(refund.refundModifiedTime),
   });
   return uniqueBy(rows, (row) => row["同步唯一键"]);
 }

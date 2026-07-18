@@ -36,6 +36,7 @@ npm run sync
 npm run payroll
 # 历史全量回填（建议通过 GitHub Actions 手工触发）
 node src/index.js new-backfill --start=2026-06-01
+node src/index.js new-archive
 ```
 
 - `check`：实际查询一条库存，同时验证快递助手 session、网关、签名和飞书读取权限。
@@ -44,6 +45,7 @@ node src/index.js new-backfill --start=2026-06-01
 - `sync`：日常增量同步，并在符合日期时自动结算工资。
 - `payroll`：单独执行工资月结；测试时可用 `node src/index.js payroll --force`。
 - `new-backfill`：按 ERP 接口可查询范围回填订单、售后、物流、订单/商品利润；生产环境建议使用 GitHub Actions 的 `Full ERP backfill`，避免占用 Render Web 进程。
+- 原始订单、订单明细和物流按创建月份直接写入分表；单月接近15,000条时自动切换为该月上、下半月分表，避免飞书单表20,000条上限。
 
 每次同步会在 `logs` 目录生成 JSON 报告，包含各表读取、新增、更新、失败数量和失败原因。
 

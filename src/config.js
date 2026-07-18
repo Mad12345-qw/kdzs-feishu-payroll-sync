@@ -30,6 +30,7 @@ export function getConfig({ requireKdzs = true } = {}) {
       appSecret: process.env.FEISHU_APP_SECRET,
       baseToken: process.env.FEISHU_BASE_TOKEN || "LJB0bAyHFaTJ09sooPactc2xn4e",
       baseUrl: "https://open.feishu.cn/open-apis",
+      requestTimeoutMs: integer("FEISHU_REQUEST_TIMEOUT_MS", 30000),
     },
     kdzs: {
       appKey: process.env.KDZS_APP_KEY,
@@ -47,7 +48,6 @@ export function getConfig({ requireKdzs = true } = {}) {
       profitLookbackDays: integer("PROFIT_LOOKBACK_DAYS", 45),
       profitDetailLookbackDays: integer("PROFIT_DETAIL_LOOKBACK_DAYS", 3),
       payrollSettlementDay: integer("PAYROLL_SETTLEMENT_DAY", 15),
-      expectedPayrollStoreCount: integer("EXPECTED_PAYROLL_STORE_COUNT", 2),
     },
     runtime: {
       port: integer("PORT", 3000),

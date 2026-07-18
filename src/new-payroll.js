@@ -8,16 +8,13 @@ function value(input) {
 export class NewPayrollService {
   constructor({ feishu, tables, config = {} }) { this.feishu = feishu; this.tables = tables; this.config = config; }
 
-  isParticipant(fields) {
-    const valueToCheck = fields?.["参与工资结算"];
-    return valueToCheck === true || ["是", "启用", "参与", "true", "1", 1].includes(valueToCheck);
+  isPayrollConfigured(fields) {
+    return value(fields?.["在职状态"]) !== "离职" && Boolean(value(fields?.["姓名"])) && Boolean(value(fields?.["所属店铺"]));
   }
 
   async participantCheck() {
     const people = await this.feishu.listRecords(this.tables.people.id);
-    const participants = people.map((record) => record.fields || {}).filter((person) => {
-      return value(person["在职状态"]) !== "离职" && this.isParticipant(person) && person["姓名"] && person["所属店铺"];
-    });
+    const participants = people.map((record) => record.fields || {}).filter((person) => this.isPayrollConfigured(person));
     const names = new Set(); const stores = new Set(); const errors = [];
     for (const person of participants) {
       const name = value(person["姓名"]); const store = value(person["所属店铺"]);
@@ -27,9 +24,6 @@ export class NewPayrollService {
       if (salary < 0) errors.push(`底薪不能为负数：${name}`);
       if (rate < 0 || rate > 1) errors.push(`提成比例必须在0到1之间：${name}`);
     }
-    const expected = Number(this.config?.sync?.expectedPayrollStoreCount || 2);
-    if (participants.length !== expected) errors.push(`参与结算人员数为${participants.length}，要求为${expected}`);
-    if (stores.size !== expected) errors.push(`参与结算店铺数为${stores.size}，要求为${expected}`);
     return { people, participants, stores, errors };
   }
 
@@ -45,7 +39,7 @@ export class NewPayrollService {
     const creates = []; const updates = []; const participantNames = new Set();
     for (const record of people) {
       const person = record.fields || {};
-      if (value(person["在职状态"]) === "离职" || !this.isParticipant(person)) continue;
+      if (!this.isPayrollConfigured(person)) continue;
       const name = value(person["姓名"]); const store = value(person["所属店铺"]);
       if (!name || !store) continue;
       participantNames.add(name);

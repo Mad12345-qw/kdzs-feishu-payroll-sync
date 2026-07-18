@@ -16,13 +16,15 @@ try {
   const kdzs = requireKdzs ? new KdzsClient(config.kdzs) : null;
   const service = new SyncService({ kdzs, feishu, config });
   let result;
-  if (["new-migrate", "new-sync", "new-daily", "new-payroll", "new-profit", "new-backfill"].includes(command)) {
+  if (["new-migrate", "new-sync", "new-daily", "new-payroll", "new-profit", "new-backfill", "new-archive", "new-release-orders"].includes(command)) {
     const sessionClient = await createKdzsFromSessionTable(feishu, config);
     const newService = new NewBaseSyncService({ feishu, kdzs: sessionClient, config });
     if (command === "new-migrate") result = await newService.migrate();
     else if (command === "new-sync") result = await newService.executeLogged("小时同步", () => newService.syncOperational());
     else if (command === "new-daily") result = await newService.executeLogged("日同步", () => newService.syncDaily());
     else if (command === "new-profit") result = await newService.executeLogged("利润同步", () => newService.syncProfit());
+    else if (command === "new-archive") result = await newService.executeLogged("历史归档", () => newService.archiveOperationalHistory({ retentionDays: 14 }));
+    else if (command === "new-release-orders") result = await newService.executeLogged("订单归档释放", () => newService.releaseArchivedOrders({ retentionDays: 14 }));
     else if (command === "new-backfill") {
       const start = process.argv.find((arg) => arg.startsWith("--start="))?.slice(8) || config.sync.startDate;
       const end = process.argv.find((arg) => arg.startsWith("--end="))?.slice(6) || undefined;

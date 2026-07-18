@@ -34,6 +34,40 @@ function daysInMonth(month) {
   return Math.round((end.getTime() - start.getTime() + 1000) / 86400000);
 }
 
+function archivePeriod(dateText) {
+  const [year, month, day] = dateText.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return day <= 14 ? `${year}-${String(month).padStart(2, "0")}-01_14` : `${year}-${String(month).padStart(2, "0")}-15_${lastDay}`;
+}
+
+function halfMonthRanges(start, end) {
+  const ranges = []; let cursor = new Date(start);
+  while (cursor <= end) {
+    const text = dateOnly(cursor); const [year, month, day] = text.split("-").map(Number);
+    const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const periodEndDay = day <= 14 ? 14 : lastDay;
+    const periodEnd = new Date(`${year}-${String(month).padStart(2, "0")}-${String(periodEndDay).padStart(2, "0")}T23:59:59+08:00`);
+    const clipped = periodEnd > end ? new Date(end) : periodEnd;
+    ranges.push([new Date(cursor), clipped, archivePeriod(text)]);
+    cursor = addDays(new Date(`${dateOnly(clipped)}T00:00:00+08:00`), 1);
+  }
+  return ranges;
+}
+
+function partitionDate(value) {
+  const date = fieldText(value).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "";
+}
+
+function monthPartition(value) {
+  return partitionDate(value).slice(0, 7);
+}
+
+function halfMonthPartition(value) {
+  const date = partitionDate(value);
+  return Number(date.slice(8, 10)) <= 14 ? "01_14" : "15_31";
+}
+
 export class NewBaseSyncService {
   constructor({ feishu, kdzs, config, logger = console }) {
     this.feishu = feishu; this.kdzs = kdzs; this.config = config; this.logger = logger;
@@ -160,19 +194,87 @@ export class NewBaseSyncService {
       { "规则项": "金额精度", "当前规则": "所有金额四舍五入保留2位。", "客户维护说明": "无需操作。" },
       { "规则项": "月度人工项", "当前规则": "绩效、奖金、扣款未填写按0。", "客户维护说明": "在工资结算表维护。" },
       { "规则项": "历史结果", "当前规则": "结算后固化底薪、比例、利润、提成和工资快照。", "客户维护说明": "已结算结果不自动变化。" },
-      { "规则项": "结算范围", "当前规则": "人员配置表参与工资结算填写是；默认要求两个店铺且每店一人。", "客户维护说明": "只勾选实际参与主播，客服和仓储人员保持否。" },
+      { "规则项": "结算范围", "当前规则": "人员配置表中姓名、所属店铺、基本工资和提成百分比齐全的在职人员自动参与结算。", "客户维护说明": "新增、删除或调整人员行后，待结算工资会自动刷新；无需填写额外开关。" },
       { "规则项": "结算闸门", "当前规则": "存在写入失败、利润日覆盖不完整或ERP与飞书差额超过0.01时禁止结算。", "客户维护说明": "处理系统数据异常后重新同步。" },
     ];
     const existingRuleNames = new Set(existingRules.map((record) => fieldText(record.fields?.["规则项"])));
     const missingRules = defaultRules.filter((row) => !existingRuleNames.has(row["规则项"]));
     if (missingRules.length) await this.feishu.batchCreate(this.tables.payrollRules.id, missingRules);
+    const settlementRule = defaultRules.find((row) => row["规则项"] === "结算范围");
+    const currentSettlementRule = existingRules.find((record) => fieldText(record.fields?.["规则项"]) === "结算范围");
+    if (settlementRule && currentSettlementRule && (
+      fieldText(currentSettlementRule.fields?.["当前规则"]) !== settlementRule["当前规则"]
+      || fieldText(currentSettlementRule.fields?.["客户维护说明"]) !== settlementRule["客户维护说明"]
+    )) {
+      await this.feishu.batchUpdate(this.tables.payrollRules.id, [{ record_id: currentSettlementRule.record_id, fields: settlementRule }]);
+    }
     return this.tables;
   }
 
   stamp(rows) { const now = Date.now(); return rows.map((row) => ({ ...row, [SYNC_TIME]: now })); }
 
-  async upsert(table, rows, legacyKey) {
-    return this.feishu.upsert(table.id, this.stamp(rows), { legacyKey });
+  async upsert(table, rows, legacyKey, options = {}) {
+    return this.feishu.upsert(table.id, this.stamp(rows), { legacyKey, ...options });
+  }
+
+  async ensurePartitionTable(name, rows) {
+    const sample = rows[0];
+    const fieldNames = ["同步唯一键", ...Object.keys(sample).filter((key) => key !== "同步唯一键" && key !== SYNC_TIME)];
+    const table = await this.feishu.ensureTable(name, fieldNames.map((fieldName) => ({
+      field_name: fieldName, type: typeof sample[fieldName] === "number" ? 2 : 1,
+    })));
+    await this.feishu.ensureField(table.table_id, "同步唯一键", 1);
+    await this.feishu.ensureField(table.table_id, SYNC_TIME, 5, { date_formatter: "yyyy/MM/dd HH:mm" });
+    return { name, id: table.table_id };
+  }
+
+  async writeOperationalPartition(name, rows, { maxRecords = 15000 } = {}) {
+    if (!rows.length) return { total: 0, created: 0, updated: 0, failed: 0, failures: [], overLimit: false, existingRows: [], newRows: [] };
+    const table = await this.ensurePartitionTable(name, rows);
+    const existing = await this.feishu.listRecords(table.id);
+    const existingKeys = new Set(existing.map((record) => fieldText(record.fields?.["同步唯一键"])).filter(Boolean));
+    const existingRows = rows.filter((row) => existingKeys.has(fieldText(row["同步唯一键"])));
+    const newRows = rows.filter((row) => !existingKeys.has(fieldText(row["同步唯一键"])));
+    if (existing.length + newRows.length > maxRecords) {
+      return { total: rows.length, created: 0, updated: 0, failed: 0, failures: [], overLimit: true, existingRows, newRows };
+    }
+    const write = await this.feishu.upsert(table.id, this.stamp(rows), { legacyKey: (fields) => fields["同步唯一键"] });
+    return { ...write, overLimit: false, existingRows: [], newRows: [] };
+  }
+
+  async upsertOperationalPartitions(prefix, rows, dateField) {
+    const grouped = new Map();
+    for (const row of rows) {
+      const month = monthPartition(row[dateField]);
+      if (!month) throw new Error(`${prefix}缺少有效日期字段：${dateField}`);
+      if (!grouped.has(month)) grouped.set(month, []);
+      grouped.get(month).push(row);
+    }
+    const results = [];
+    for (const [month, monthlyRows] of grouped) {
+      const monthly = await this.writeOperationalPartition(`${prefix}_${month}`, monthlyRows);
+      if (!monthly.overLimit) {
+        results.push({ partition: month, ...monthly });
+        continue;
+      }
+      if (monthly.existingRows.length) {
+        const updates = await this.writeOperationalPartition(`${prefix}_${month}`, monthly.existingRows);
+        if (updates.overLimit || updates.failed) throw new Error(`${prefix}_${month}已有记录更新失败`);
+        results.push({ partition: month, ...updates });
+      }
+      const halves = new Map();
+      for (const row of monthly.newRows) {
+        const half = halfMonthPartition(row[dateField]);
+        if (!halves.has(half)) halves.set(half, []);
+        halves.get(half).push(row);
+      }
+      for (const [half, halfRows] of halves) {
+        const split = await this.writeOperationalPartition(`${prefix}_${month}_${half}`, halfRows);
+        if (split.overLimit) throw new Error(`${prefix}_${month}_${half}超过15000条安全阈值，需要继续按日拆分`);
+        results.push({ partition: `${month}_${half}`, ...split });
+      }
+    }
+    return { partitions: results };
   }
 
   async writeSyncLog(fields) {
@@ -237,22 +339,24 @@ export class NewBaseSyncService {
     });
     const stock = await this.kdzs.listAll("kdzs.erp.api.stock.list");
     return {
-      orders: await this.upsert(this.tables.orders, mapNewOrders(trades), (f) => f.tid || f["文本"]),
-      orderItems: await this.upsert(this.tables.orderItems, mapNewOrderItems(trades), (f) => f["同步唯一键"] || f["文本"]),
-      refunds: await this.upsert(this.tables.refunds, mapNewRefunds(refunds), (f) => f["退款编号"]),
-      refundItems: await this.upsert(this.tables.refundItems, mapNewRefundItems(refunds), (f) => f["同步唯一键"]),
-      logistics: await this.upsert(this.tables.logistics, mapLogistics(logistics), (f) => f["同步唯一键"]),
+      orders: await this.upsertOperationalPartitions("订单", mapNewOrders(trades), "created"),
+      orderItems: await this.upsertOperationalPartitions("订单明细", mapNewOrderItems(trades), "created"),
+      refunds: await this.upsertOperationalPartitions("售后", mapNewRefunds(refunds), "创建时间"),
+      refundItems: await this.upsertOperationalPartitions("售后明细", mapNewRefundItems(refunds), "创建时间"),
+      logistics: await this.upsertOperationalPartitions("物流", mapLogistics(logistics), "发货时间"),
       stock: await this.upsert(this.tables.stock, mapNewStock(stock), (f) => f["货品规格ID"]),
     };
   }
 
   async syncDaily({ profitLookbackDays = this.config.sync.profitLookbackDays, profitDetailLookbackDays = this.config.sync.profitDetailLookbackDays } = {}) {
     await this.migrate();
+    const archive = { skipped: true, reason: "订单、明细和物流已改为按月直接分表，不再迁移实时大表" };
     const platformItems = await this.kdzs.listAll("kdzs.erp.api.platform.item.list", { returnSku: true });
     const erpItems = await this.kdzs.listAll("kdzs.erp.api.sys.item.list", { needSkuDetail: true });
     const stockIns = await this.kdzs.listAll("kdzs.erp.api.stock.in.list");
     const purchases = await this.kdzs.listAll("kdzs.erp.api.purchase.list");
     const results = {
+      archive,
       platformProducts: await this.upsert(this.tables.platformProducts, mapNewPlatformProducts(platformItems), (f) => f["商品id"]),
       platformSkus: await this.upsert(this.tables.platformSkus, mapNewPlatformSkus(platformItems), (f) => f["同步唯一键"]),
       erpProducts: await this.upsert(this.tables.erpProducts, mapNewErpProducts(erpItems), (f) => String(f.sysItemId || "")),
@@ -311,8 +415,8 @@ export class NewBaseSyncService {
         if (f["同步唯一键"]) return f["同步唯一键"];
         const date = number(f["统计日期"]); return `${date ? dateOnly(new Date(date)) : ""}|${fieldText(f["平台"])}|${fieldText(f["店铺名称"])}`;
       }),
-      orderProfit: await this.upsert(this.tables.orderProfit, orderProfit, (f) => f["同步唯一键"] || f["文本"]),
-      productProfit: await this.upsert(this.tables.productProfit, productProfit, (f) => f["同步唯一键"] || f["文本"]),
+      orderProfit: await this.upsertOperationalPartitions("订单利润", orderProfit, "date"),
+      productProfit: await this.upsertOperationalPartitions("商品利润", productProfit, "date"),
       coverage: await this.upsert(this.tables.syncLogs, coverage, (f) => f["同步唯一键"]),
     };
     return results;
@@ -354,24 +458,205 @@ export class NewBaseSyncService {
     return { month, coverageDays, expectedDays, rows, write, passed: rows.length > 0 && rows.every((row) => row["对账状态"] === "通过") };
   }
 
+  async archiveMappedRows(name, rows, { updateExisting = true } = {}) {
+    if (!rows.length) return { total: 0, created: 0, updated: 0, failed: 0, failures: [] };
+    const sample = rows[0];
+    const fieldNames = ["同步唯一键", ...Object.keys(sample).filter((key) => key !== "同步唯一键" && key !== SYNC_TIME)];
+    const fields = fieldNames.map((fieldName) => ({ field_name: fieldName, type: typeof sample[fieldName] === "number" ? 2 : 1 }));
+    const table = await this.feishu.ensureTable(name, fields);
+    await this.feishu.ensureField(table.table_id, "同步唯一键", 1);
+    await this.feishu.ensureField(table.table_id, SYNC_TIME, 5, { date_formatter: "yyyy/MM/dd HH:mm" });
+    return this.upsert({ name, id: table.table_id }, rows, (record) => record["同步唯一键"], { updateExisting });
+  }
+
+  async archiveOperationalHistoryLegacy({ retentionDays = 14 } = {}) {
+    await this.migrate();
+    const cutoff = dateOnly(addDays(new Date(), -retentionDays));
+    const [orders, orderItems, logistics, orderProfit, productProfit] = await Promise.all([
+      this.feishu.listRecords(this.tables.orders.id), this.feishu.listRecords(this.tables.orderItems.id), this.feishu.listRecords(this.tables.logistics.id),
+      this.feishu.listRecords(this.tables.orderProfit.id), this.feishu.listRecords(this.tables.productProfit.id),
+    ]);
+    const oldOrders = orders.filter((record) => {
+      const created = fieldText(record.fields?.created).slice(0, 10); return created && created < cutoff;
+    });
+    const periodByTid = new Map(oldOrders.map((record) => [fieldText(record.fields?.tid), archivePeriod(fieldText(record.fields?.created).slice(0, 10))]));
+    const orderGroups = new Map(); const itemGroups = new Map(); const logisticsGroups = new Map();
+    const orderProfitGroups = new Map(); const productProfitGroups = new Map();
+    const push = (map, key, value) => { if (!map.has(key)) map.set(key, []); map.get(key).push(value); };
+    for (const record of oldOrders) push(orderGroups, periodByTid.get(fieldText(record.fields?.tid)), record);
+    for (const record of orderItems) {
+      const period = periodByTid.get(fieldText(record.fields?.tid)); if (period) push(itemGroups, period, record);
+    }
+    for (const record of logistics) {
+      const sent = fieldText(record.fields?.["发货时间"]).slice(0, 10); if (sent && sent < cutoff) push(logisticsGroups, archivePeriod(sent), record);
+    }
+    for (const record of orderProfit) {
+      const date = fieldText(record.fields?.date).slice(0, 10); if (date && date < cutoff) push(orderProfitGroups, archivePeriod(date), record);
+    }
+    for (const record of productProfit) {
+      const date = fieldText(record.fields?.date).slice(0, 10); if (date && date < cutoff) push(productProfitGroups, archivePeriod(date), record);
+    }
+    const results = { orders: [], orderItems: [], logistics: [], orderProfit: [], productProfit: [],
+      deleted: { orders: 0, orderItems: 0, logistics: 0, orderProfit: 0, productProfit: 0 } };
+    for (const [period, records] of orderGroups) {
+      const write = await this.archiveMappedRows(`归档订单_${period}`, records.map((record) => ({ ...record.fields, "同步唯一键": fieldText(record.fields?.["同步唯一键"]) || fieldText(record.fields?.tid) })));
+      if (write.failed) throw new Error(`归档订单_${period}存在写入失败，禁止删除源记录`);
+      results.orders.push({ period, ...write });
+    }
+    for (const [period, records] of itemGroups) {
+      const write = await this.archiveMappedRows(`归档订单明细_${period}`, records.map((record) => ({ ...record.fields })));
+      if (write.failed) throw new Error(`归档订单明细_${period}存在写入失败，禁止删除源记录`);
+      results.orderItems.push({ period, ...write });
+    }
+    for (const [period, records] of logisticsGroups) {
+      const write = await this.archiveMappedRows(`归档物流_${period}`, records.map((record) => ({ ...record.fields })));
+      if (write.failed) throw new Error(`归档物流_${period}存在写入失败，禁止删除源记录`);
+      results.logistics.push({ period, ...write });
+    }
+    for (const [period, records] of orderProfitGroups) {
+      const write = await this.archiveMappedRows(`归档订单利润_${period}`, records.map((record) => ({ ...record.fields })));
+      if (write.failed) throw new Error(`归档订单利润_${period}存在写入失败，禁止删除源记录`);
+      results.orderProfit.push({ period, ...write });
+    }
+    for (const [period, records] of productProfitGroups) {
+      const write = await this.archiveMappedRows(`归档商品利润_${period}`, records.map((record) => ({ ...record.fields })));
+      if (write.failed) throw new Error(`归档商品利润_${period}存在写入失败，禁止删除源记录`);
+      results.productProfit.push({ period, ...write });
+    }
+    if (oldOrders.length) results.deleted.orders = (await this.feishu.batchDelete(this.tables.orders.id, oldOrders.map((record) => record.record_id))).deleted;
+    const oldItems = orderItems.filter((record) => periodByTid.has(fieldText(record.fields?.tid)));
+    if (oldItems.length) results.deleted.orderItems = (await this.feishu.batchDelete(this.tables.orderItems.id, oldItems.map((record) => record.record_id))).deleted;
+    const oldLogistics = [...logisticsGroups.values()].flat();
+    if (oldLogistics.length) results.deleted.logistics = (await this.feishu.batchDelete(this.tables.logistics.id, oldLogistics.map((record) => record.record_id))).deleted;
+    const oldOrderProfit = [...orderProfitGroups.values()].flat();
+    if (oldOrderProfit.length) results.deleted.orderProfit = (await this.feishu.batchDelete(this.tables.orderProfit.id, oldOrderProfit.map((record) => record.record_id))).deleted;
+    const oldProductProfit = [...productProfitGroups.values()].flat();
+    if (oldProductProfit.length) results.deleted.productProfit = (await this.feishu.batchDelete(this.tables.productProfit.id, oldProductProfit.map((record) => record.record_id))).deleted;
+    return results;
+  }
+
+  async archiveOperationalHistory({ retentionDays = 14 } = {}) {
+    await this.migrate();
+    const cutoff = dateOnly(addDays(new Date(), -retentionDays));
+    const results = { orders: [], orderItems: [], logistics: [], orderProfit: [], productProfit: [],
+      deleted: { orders: 0, orderItems: 0, logistics: 0, orderProfit: 0, productProfit: 0 } };
+    const archiveGroups = async (kind, prefix, groups, mapRecord = (record) => ({ ...record.fields })) => {
+      for (const [period, records] of groups) {
+        const write = await this.archiveMappedRows(`${prefix}${period}`, records.map(mapRecord), { updateExisting: false });
+        if (write.total !== records.length) throw new Error(`${prefix}${period}存在缺失唯一键，禁止删除源记录`);
+        if (write.failed) throw new Error(`${prefix}${period}存在写入失败，禁止删除源记录`);
+        results[kind].push({ period, ...write });
+        results.deleted[kind] += (await this.feishu.batchDelete(this.tables[kind].id, records.map((record) => record.record_id))).deleted;
+      }
+    };
+    const group = (records, periodFor) => {
+      const output = new Map();
+      for (const record of records) {
+        const period = periodFor(record);
+        if (!period) continue;
+        if (!output.has(period)) output.set(period, []);
+        output.get(period).push(record);
+      }
+      return output;
+    };
+
+    const orders = await this.feishu.listRecords(this.tables.orders.id);
+    const oldOrders = orders.filter((record) => {
+      const created = fieldText(record.fields?.created).slice(0, 10);
+      return created && created < cutoff;
+    });
+    const periodByTid = new Map(oldOrders.map((record) => [fieldText(record.fields?.tid), archivePeriod(fieldText(record.fields?.created).slice(0, 10))]));
+    await archiveGroups("orders", "归档订单_", group(oldOrders, (record) => periodByTid.get(fieldText(record.fields?.tid))), (record) => ({
+      ...record.fields, "同步唯一键": fieldText(record.fields?.["同步唯一键"]) || fieldText(record.fields?.tid),
+    }));
+
+    const orderItems = await this.feishu.listRecords(this.tables.orderItems.id);
+    await archiveGroups("orderItems", "归档订单明细_", group(orderItems, (record) => periodByTid.get(fieldText(record.fields?.tid))));
+
+    const logistics = await this.feishu.listRecords(this.tables.logistics.id);
+    await archiveGroups("logistics", "归档物流_", group(logistics, (record) => {
+      const sent = fieldText(record.fields?.["发货时间"]).slice(0, 10);
+      return sent && sent < cutoff ? archivePeriod(sent) : "";
+    }));
+
+    const orderProfit = await this.feishu.listRecords(this.tables.orderProfit.id);
+    await archiveGroups("orderProfit", "归档订单利润_", group(orderProfit, (record) => {
+      const date = fieldText(record.fields?.date).slice(0, 10);
+      return date && date < cutoff ? archivePeriod(date) : "";
+    }));
+
+    const productProfit = await this.feishu.listRecords(this.tables.productProfit.id);
+    await archiveGroups("productProfit", "归档商品利润_", group(productProfit, (record) => {
+      const date = fieldText(record.fields?.date).slice(0, 10);
+      return date && date < cutoff ? archivePeriod(date) : "";
+    }));
+    return results;
+  }
+
+  async releaseArchivedOrders({ retentionDays = 14 } = {}) {
+    await this.migrate();
+    const cutoff = dateOnly(addDays(new Date(), -retentionDays));
+    const orders = await this.feishu.listRecords(this.tables.orders.id);
+    const oldOrders = orders.filter((record) => {
+      const created = fieldText(record.fields?.created).slice(0, 10);
+      return created && created < cutoff;
+    });
+    const groups = new Map();
+    for (const record of oldOrders) {
+      const period = archivePeriod(fieldText(record.fields?.created).slice(0, 10));
+      if (!groups.has(period)) groups.set(period, []);
+      groups.get(period).push(record);
+    }
+    const result = { cutoff, scanned: orders.length, archived: [], deleted: 0 };
+    for (const [period, records] of groups) {
+      const write = await this.archiveMappedRows(`归档订单_${period}`, records.map((record) => ({
+        ...record.fields, "同步唯一键": fieldText(record.fields?.["同步唯一键"]) || fieldText(record.fields?.tid),
+      })), { updateExisting: false });
+      if (write.failed || write.created + write.updated !== records.length) {
+        throw new Error(`归档订单_${period}核验不完整，禁止删除实时订单`);
+      }
+      const removed = await this.feishu.batchDelete(this.tables.orders.id, records.map((record) => record.record_id));
+      result.archived.push({ period, ...write, deleted: removed.deleted });
+      result.deleted += removed.deleted;
+    }
+    return result;
+  }
+
   async syncBackfill({ startDate = this.config.sync.startDate, endDate = dateOnly(new Date()) } = {}) {
     await this.migrate();
     const start = new Date(`${startDate}T00:00:00+08:00`); const end = new Date(`${endDate}T23:59:59+08:00`);
-    const trades = []; const refunds = []; const logistics = [];
-    for (const [from, to] of dateChunks(start, end, 7)) {
-      const range = { startTime: startOfDayString(from), endTime: endOfDayString(to) };
-      trades.push(...await this.kdzs.listAll("kdzs.erp.api.trade.list", { timeType: "CREATE_TIME", ...range }, 200));
-      logistics.push(...await this.kdzs.listAll("kdzs.erp.api.report.logistics", { sendTimeStart: range.startTime, sendTimeEnd: range.endTime }, 200));
+    const results = { periods: [], refunds: null, profit: null };
+    for (const [periodStart, periodEnd, period] of halfMonthRanges(start, end)) {
+      const trades = []; const logistics = []; const orderProfit = []; const productProfit = [];
+      for (const [from, to] of dateChunks(periodStart, periodEnd, 7)) {
+        const range = { startTime: startOfDayString(from), endTime: endOfDayString(to) };
+        trades.push(...await this.kdzs.listAll("kdzs.erp.api.trade.list", { timeType: "CREATE_TIME", ...range }, 200));
+        logistics.push(...await this.kdzs.listAll("kdzs.erp.api.report.logistics", { sendTimeStart: range.startTime, sendTimeEnd: range.endTime }, 200));
+      }
+      for (const [day] of dateChunks(periodStart, periodEnd, 1)) {
+        const range = { queryTimeType: 3, startTime: startOfDayString(day), endTime: endOfDayString(day) };
+        orderProfit.push(...mapOrderProfit(await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { ...range, queryGroupType: 7 }), dateOnly(day)));
+        productProfit.push(...mapProductProfit(await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { ...range, queryGroupType: 8 }), dateOnly(day)));
+      }
+      const periodResult = {
+        period,
+        orders: await this.upsertOperationalPartitions("订单", mapNewOrders(trades), "created"),
+        orderItems: await this.upsertOperationalPartitions("订单明细", mapNewOrderItems(trades), "created"),
+        logistics: await this.upsertOperationalPartitions("物流", mapLogistics(logistics), "发货时间"),
+        orderProfit: await this.upsertOperationalPartitions("订单利润", orderProfit, "date"),
+        productProfit: await this.upsertOperationalPartitions("商品利润", productProfit, "date"),
+      };
+      const stats = collectStats(periodResult, period); if (stats.failed) throw new Error(`${period}归档存在${stats.failed}条失败`);
+      results.periods.push(periodResult);
     }
+    const refunds = [];
     for (const [from, to] of dateChunks(start, end, 30)) refunds.push(...await this.kdzs.listAll("kdzs.erp.api.refund.list", { createTimeStart: startOfDayString(from), createTimeEnd: endOfDayString(to) }));
-    const results = {
-      orders: await this.upsert(this.tables.orders, mapNewOrders(trades), (f) => f.tid || f["文本"]),
-      orderItems: await this.upsert(this.tables.orderItems, mapNewOrderItems(trades), (f) => f["同步唯一键"] || f["文本"]),
-      refunds: await this.upsert(this.tables.refunds, mapNewRefunds(refunds), (f) => f["退款编号"]),
-      refundItems: await this.upsert(this.tables.refundItems, mapNewRefundItems(refunds), (f) => f["同步唯一键"]),
-      logistics: await this.upsert(this.tables.logistics, mapLogistics(logistics), (f) => f["同步唯一键"]),
-      profit: await this.syncProfit({ startDate: start.toISOString(), endDate: end.toISOString(), includeDetails: true, skipMigrate: true }),
+    results.refunds = {
+      refunds: await this.upsertOperationalPartitions("售后", mapNewRefunds(refunds), "创建时间"),
+      refundItems: await this.upsertOperationalPartitions("售后明细", mapNewRefundItems(refunds), "创建时间"),
     };
+    results.profit = await this.syncProfit({ startDate: start.toISOString(), endDate: end.toISOString(), includeDetails: false,
+      profitDetailLookbackDays: 0, skipMigrate: true });
     return results;
   }
 }
