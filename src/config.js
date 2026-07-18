@@ -40,6 +40,7 @@ export function getConfig({ requireKdzs = true } = {}) {
       session: process.env.KDZS_SESSION,
       gateway: process.env.KDZS_GATEWAY || "https://gw.kuaidizs.cn/open/api",
       tokenUrl: process.env.KDZS_TOKEN_URL || "http://gw.superboss.cc/api/token",
+      requestTimeoutMs: integer("KDZS_REQUEST_TIMEOUT_MS", 30000),
       tradeModifiedTimeType: process.env.KDZS_TRADE_MODIFIED_TIME_TYPE || "MODIFIED_TIME",
       tradeCreatedTimeType: process.env.KDZS_TRADE_CREATED_TIME_TYPE || "CREATE_TIME",
     },
