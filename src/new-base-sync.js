@@ -242,7 +242,8 @@ export class NewBaseSyncService {
     const existingByKey = new Map(existing.map((record) => [fieldText(record.fields?.["同步唯一键"]), record.record_id]).filter(([key]) => key));
     const existingRows = rows.filter((row) => existingByKey.has(fieldText(row["同步唯一键"])));
     const newRows = rows.filter((row) => !existingByKey.has(fieldText(row["同步唯一键"])));
-    if (existing.length + newRows.length > maxRecords) {
+    // 仅新增记录会占用容量；已有记录的状态/退款更新即使表已满也必须允许写回。
+    if (newRows.length > 0 && existing.length + newRows.length > maxRecords) {
       return { total: rows.length, created: 0, updated: 0, failed: 0, failures: [], overLimit: true, existingRows, newRows };
     }
     const stamped = this.stamp(rows);
@@ -277,7 +278,10 @@ export class NewBaseSyncService {
       }
       if (monthly.existingRows.length) {
         const updates = await this.writeOperationalPartition(`${prefix}_${month}`, monthly.existingRows);
-        if (updates.overLimit || updates.failed) throw new Error(`${prefix}_${month}已有记录更新失败`);
+        if (updates.overLimit || updates.failed) {
+          const reason = updates.failures?.[0]?.reason || "容量分流异常";
+          throw new Error(`${prefix}_${month}已有记录更新失败：${reason}`);
+        }
         results.push({ partition: month, ...updates });
       }
       const halves = new Map();
@@ -294,7 +298,10 @@ export class NewBaseSyncService {
         }
         if (split.existingRows.length) {
           const updates = await this.writeOperationalPartition(`${prefix}_${month}_${half}`, split.existingRows);
-          if (updates.overLimit || updates.failed) throw new Error(`${prefix}_${month}_${half}已有记录更新失败`);
+          if (updates.overLimit || updates.failed) {
+            const reason = updates.failures?.[0]?.reason || "容量分流异常";
+            throw new Error(`${prefix}_${month}_${half}已有记录更新失败：${reason}`);
+          }
           results.push({ partition: `${month}_${half}`, ...updates });
         }
         const days = new Map();
