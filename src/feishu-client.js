@@ -66,10 +66,12 @@ export class FeishuClient {
         throw error;
       }
       if (!response.ok || json.code !== 0) {
-        const error = new Error(`飞书接口失败：${json.msg || response.status} (${endpoint})`);
+        const message = json.msg || response.status;
+        const error = new Error(`飞书接口失败：${message} (${endpoint})`);
         error.status = response.status;
         error.code = json.code;
         error.response = json;
+        error.retryable = /data not ready|数据未就绪/i.test(String(message));
         throw error;
       }
       return json.data;

@@ -684,8 +684,8 @@ export class NewBaseSyncService {
       const stats = collectStats(dayResult, dayText); if (stats.failed) throw new Error(`${dayText}回填存在${stats.failed}条失败`);
       results.days.push(dayResult);
     }
-    results.profit = await this.syncProfit({ startDate: start.toISOString(), endDate: end.toISOString(), includeDetails: false,
-      profitDetailLookbackDays: 0, skipMigrate: true });
+    // 原始数据可按日期并发回填；店铺利润汇总表必须在原始回填完成后单线程刷新，避免飞书汇总表并发读取时返回“数据未就绪”。
+    results.profit = { skipped: true, reason: "店铺利润汇总在原始分表回填完成后单线程执行" };
     return results;
   }
 }
