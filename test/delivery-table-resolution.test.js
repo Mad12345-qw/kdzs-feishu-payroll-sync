@@ -10,9 +10,10 @@ test("交付同步按表名解析客户副本中的新表 ID", async () => {
     feishu: { listTables: async () => tables }, kdzs: {}, logger: { info() {} },
   });
   const resolved = await service.resolveBusinessTables();
-  assert.equal(resolved.storeProfit.id, "new-table-0");
-  assert.equal(resolved.payroll.id, "new-table-8");
-  assert.equal(resolved.people.id, "new-table-7");
+  assert.equal(resolved.dailyOverview.id, "new-table-0");
+  assert.equal(resolved.storeProfit.id, "new-table-1");
+  assert.equal(resolved.payroll.id, "new-table-9");
+  assert.equal(resolved.people.id, "new-table-8");
 });
 
 test("成功同步会清空客户副本遗留的失败原因", async () => {
