@@ -67,6 +67,10 @@ function mapDailyOverview(items, day) {
       "销售毛利率": sales ? roundMoney(money(row["销售毛利"]) / sales * 100) : 0,
       "销售均价": quantity ? roundMoney(sales / quantity) : 0,
       "数据来源": "02_店铺利润明细（ERP）",
+      "筛选年份": day.slice(0, 4),
+      "筛选月份": `${day.slice(5, 7)}月`,
+      "筛选店铺": text(row["店铺名称"]),
+      "筛选平台": text(row["平台类型"]),
     };
   });
 }
@@ -206,6 +210,34 @@ export class DeliverySyncService {
     return this.tables;
   }
 
+  async ensureOverviewFilterFields(rows) {
+    const definitions = [
+      { name: "筛选年份", values: rows.map((row) => text(row["筛选年份"])) },
+      { name: "筛选月份", values: rows.map((row) => text(row["筛选月份"])) },
+      { name: "筛选店铺", values: rows.map((row) => text(row["筛选店铺"])) },
+      { name: "筛选平台", values: rows.map((row) => text(row["筛选平台"])) },
+    ];
+    const fields = await this.feishu.listFields(this.tables.dailyOverview.id);
+    for (const definition of definitions) {
+      const values = [...new Set(definition.values.filter(Boolean))].sort();
+      let field = fields.find((item) => item.field_name === definition.name);
+      if (!field) {
+        field = await this.feishu.ensureField(this.tables.dailyOverview.id, definition.name, 3, {
+          options: values.map((name, index) => ({ name, color: index % 55 })),
+        });
+        fields.push(field);
+        continue;
+      }
+      const options = field.property?.options || [];
+      const existing = new Set(options.map((option) => option.name));
+      const missing = values.filter((value) => !existing.has(value));
+      if (missing.length) await this.feishu.updateField(this.tables.dailyOverview.id, field.field_id, {
+        field_name: definition.name, type: 3,
+        property: { options: [...options, ...missing.map((name, index) => ({ name, color: (options.length + index) % 55 }))] },
+      });
+    }
+  }
+
   async upsert(table, rows, keyField = KEY) {
     if (!rows.length) return { total: 0, created: 0, updated: 0, failed: 0, failures: [] };
     return this.feishu.upsert(table.id, rows, { keyField, legacyKey: (fields) => scalar(fields[keyField]) });
@@ -260,8 +292,10 @@ export class DeliverySyncService {
         this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 2, ...range }),
         this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 8, ...range }),
       ]);
+      const overviewRows = mapDailyOverview(storeItems, day);
+      await this.ensureOverviewFilterFields(overviewRows);
       const result = {
-        dailyOverview: await this.upsert(this.tables.dailyOverview, mapDailyOverview(storeItems, day)),
+        dailyOverview: await this.upsert(this.tables.dailyOverview, overviewRows),
         storeProfit: await this.upsert(this.tables.storeProfit, mapStoreProfit(storeItems, day)),
         productProfit: await this.writePartition("03_商品利润明细", day, mapProductProfit(productItems, day)),
         orders: await this.writePartition("06_订单列表", day, mapOrders(trades)),
@@ -310,7 +344,9 @@ export class DeliverySyncService {
     const rows = await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", {
       queryTimeType: 3, queryGroupType: 2, startTime: startOfDayString(date), endTime: endOfDayString(date),
     });
-    const overview = await this.upsert(this.tables.dailyOverview, mapDailyOverview(rows, day));
+    const overviewRows = mapDailyOverview(rows, day);
+    await this.ensureOverviewFilterFields(overviewRows);
+    const overview = await this.upsert(this.tables.dailyOverview, overviewRows);
     const write = await this.upsert(this.tables.storeProfit, mapStoreProfit(rows, day));
     if (overview.failed || overview.created + overview.updated !== overview.total) {
       throw new Error(`${day} dailyOverview写入不完整：成功${overview.created + overview.updated}/总计${overview.total}，失败${overview.failed}；${overview.failures?.[0]?.reason || "未返回具体原因"}`);
