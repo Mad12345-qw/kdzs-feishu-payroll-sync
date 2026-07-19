@@ -39,3 +39,19 @@ export async function createKdzsFromSessionTable(feishu, config) {
     },
   });
 }
+
+// Production deployments should keep ERP credentials in the host's secret
+// store. The Feishu session table remains only as a backward-compatible path.
+export async function createDeliveryKdzsClient({ feishu, config }) {
+  if (config.kdzs.appKey && config.kdzs.appSecret) {
+    return new KdzsClient({
+      appKey: config.kdzs.appKey,
+      appSecret: config.kdzs.appSecret,
+      session: config.kdzs.session,
+      gateway: config.kdzs.gateway,
+      tokenUrl: config.kdzs.tokenUrl,
+    });
+  }
+  if (!feishu) throw new Error("缺少 ERP 凭证：请配置 Render 的 KDZS_APP_KEY / KDZS_APP_SECRET");
+  return createKdzsFromSessionTable(feishu, config);
+}
