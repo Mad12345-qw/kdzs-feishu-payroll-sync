@@ -67,9 +67,10 @@ export function getConfig({ requireKdzs = true } = {}) {
   if (!config.feishu.appId) missing.push("FEISHU_APP_ID");
   if (!config.feishu.appSecret) missing.push("FEISHU_APP_SECRET");
   if (!config.feishu.baseToken) missing.push("DELIVERY_BASE_TOKEN");
-  if (!config.feishu.sourceBaseToken) missing.push("ERP_SOURCE_BASE_TOKEN");
+  const hasDirectKdzsCredentials = Boolean(config.kdzs.appKey && config.kdzs.appSecret);
   if (requireKdzs && !config.kdzs.appKey) missing.push("KDZS_APP_KEY");
   if (requireKdzs && !config.kdzs.appSecret) missing.push("KDZS_APP_SECRET");
+  if (!hasDirectKdzsCredentials && !config.feishu.sourceBaseToken) missing.push("ERP_SOURCE_BASE_TOKEN（或配置 KDZS_APP_KEY / KDZS_APP_SECRET）");
   if (missing.length) throw new Error(`缺少配置：${missing.join("、")}`);
   return config;
 }
