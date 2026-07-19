@@ -3,7 +3,7 @@ import { FeishuClient } from "./feishu-client.js";
 import { KdzsClient } from "./kdzs-client.js";
 import { preparePayrollMonth, settlePreviousMonth } from "./payroll.js";
 import { SyncService } from "./sync-service.js";
-import { createKdzsFromSessionTable } from "./session-provider.js";
+import { createDeliveryKdzsClient, createKdzsFromSessionTable } from "./session-provider.js";
 import { NewBaseSyncService } from "./new-base-sync.js";
 import { NewPayrollService } from "./new-payroll.js";
 import { previousMonth } from "./utils.js";
@@ -15,12 +15,13 @@ const requireKdzs = ["sync", "check"].includes(command);
 try {
   const config = getConfig({ requireKdzs });
   const feishu = new FeishuClient(config.feishu);
-  const sourceFeishu = new FeishuClient({ ...config.feishu, baseToken: config.feishu.sourceBaseToken });
+  const sourceFeishu = config.feishu.sourceBaseToken
+    ? new FeishuClient({ ...config.feishu, baseToken: config.feishu.sourceBaseToken }) : null;
   const kdzs = requireKdzs ? new KdzsClient(config.kdzs) : null;
   const service = new SyncService({ kdzs, feishu, config });
   let result;
   if (["delivery-backfill", "delivery-backfill-logistics", "delivery-backfill-profit", "delivery-reference", "delivery-sync-day", "delivery-prepare-payroll", "delivery-settle-payroll", "delivery-reconcile"].includes(command)) {
-    const sessionClient = await createKdzsFromSessionTable(sourceFeishu, config);
+    const sessionClient = await createDeliveryKdzsClient({ feishu: sourceFeishu, config });
     const delivery = new DeliverySyncService({ feishu, kdzs: sessionClient });
     if (command === "delivery-sync-day") {
       const day = process.argv.find((arg) => arg.startsWith("--day="))?.slice(6) || new Date().toISOString().slice(0, 10);
@@ -92,7 +93,8 @@ try {
   else throw new Error(`未知命令：${command}`);
   console.log(JSON.stringify(result, null, 2));
   if (result?.results && Object.values(result.results).some((item) => item?.failed)) process.exitCode = 1;
-  // A reconciliation with any discrepancy is a hard failure, not a successful workflow execution.
+  // A reconciliation with any discrepancy is a hard failure, not a successful
+  // workflow execution. This prevents payroll from being treated as eligible.
   if (command === "delivery-reconcile" && result?.passed === false) process.exitCode = 1;
 } catch (error) {
   console.error(JSON.stringify({ success: false, error: error.message, details: error.response }, null, 2));
