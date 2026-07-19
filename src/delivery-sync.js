@@ -2,16 +2,16 @@ import { addDays, dateChunks, dateOnly, endOfDayString, monthBounds, number, par
 
 // 客户交付库：只使用 Bvsz 内已有的业务表。LJB0 仅由 session-provider 读取 ERP 会话。
 export const DELIVERY_TABLES = {
-  storeProfit: { id: "tbl9gFmO5uMKICim", name: "02_店铺利润明细" },
-  productProfit: { id: "tblYspPneEMahri9", name: "03_商品利润明细" },
-  orders: { id: "tbl4bNkg9qYtHRnx", name: "06_订单列表" },
-  refunds: { id: "tblF7SuQiYv4azWO", name: "07_售后列表" },
-  stock: { id: "tblE8KiTH7i9Ztgi", name: "10_库存快照" },
-  platformProducts: { id: "tbliWwmw0FyCofG8", name: "11_平台商品" },
-  erpProducts: { id: "tblIy0rAsZe6Gzd4", name: "12_ERP货品" },
-  people: { id: "tblk69nrryfyiy05", name: "13_人员表" },
-  payroll: { id: "tblUmmf1ph2ri8TJ", name: "14_工资表" },
-  rules: { id: "tbl6hPsnj4M7A4oz", name: "15_工资规则说明" },
+  storeProfit: { name: "02_店铺利润明细" },
+  productProfit: { name: "03_商品利润明细" },
+  orders: { name: "06_订单列表" },
+  refunds: { name: "07_售后列表" },
+  stock: { name: "10_库存快照" },
+  platformProducts: { name: "11_平台商品" },
+  erpProducts: { name: "12_ERP货品" },
+  people: { name: "13_人员表" },
+  payroll: { name: "14_工资表" },
+  rules: { name: "15_工资规则说明" },
 };
 
 const KEY = "同步唯一键";
@@ -153,10 +153,23 @@ function mapErpProducts(items) {
 export class DeliverySyncService {
   constructor({ feishu, kdzs, logger = console }) {
     this.feishu = feishu; this.kdzs = kdzs; this.logger = logger;
-    this.tables = { ...DELIVERY_TABLES }; this.partitionCache = new Map();
+    this.tables = { ...DELIVERY_TABLES }; this.partitionCache = new Map(); this.tablesResolved = false;
+  }
+
+  async resolveBusinessTables() {
+    if (this.tablesResolved) return this.tables;
+    const available = await this.feishu.listTables();
+    for (const [key, spec] of Object.entries(DELIVERY_TABLES)) {
+      const table = available.find((item) => item.name === spec.name);
+      if (!table) throw new Error(`客户交付库缺少必需数据表：${spec.name}`);
+      this.tables[key] = { ...spec, id: table.table_id };
+    }
+    this.tablesResolved = true;
+    return this.tables;
   }
 
   async ensureSupportTables() {
+    await this.resolveBusinessTables();
     const logs = await this.feishu.ensureTable("16_同步日志", [
       { field_name: "任务键", type: 1 }, { field_name: "日期", type: 1 }, { field_name: "状态", type: 1 },
       { field_name: "订单数", type: 2 }, { field_name: "售后数", type: 2 }, { field_name: "店铺利润数", type: 2 },
