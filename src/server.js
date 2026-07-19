@@ -1,7 +1,7 @@
 import http from "node:http";
 import { getConfig } from "./config.js";
 import { FeishuClient } from "./feishu-client.js";
-import { createKdzsFromSessionTable } from "./session-provider.js";
+import { createDeliveryKdzsClient } from "./session-provider.js";
 import { NewBaseSyncService } from "./new-base-sync.js";
 import { NewPayrollService } from "./new-payroll.js";
 import { DeliverySyncService } from "./delivery-sync.js";
@@ -9,7 +9,8 @@ import { addDays, dateOnly, previousMonth } from "./utils.js";
 
 const config = getConfig({ requireKdzs: false });
 const feishu = new FeishuClient(config.feishu);
-const sourceFeishu = new FeishuClient({ ...config.feishu, baseToken: config.feishu.sourceBaseToken });
+const sourceFeishu = config.feishu.sourceBaseToken
+  ? new FeishuClient({ ...config.feishu, baseToken: config.feishu.sourceBaseToken }) : null;
 const state = {
   startedAt: new Date().toISOString(),
   schedulerEnabled: config.runtime.schedulerEnabled,
@@ -37,7 +38,7 @@ async function runOperationalSync() {
   syncRunning = true;
   state.operationalSyncRunning = true;
   try {
-    const kdzs = await createKdzsFromSessionTable(sourceFeishu, config);
+    const kdzs = await createDeliveryKdzsClient({ feishu: sourceFeishu, config });
     const service = new DeliverySyncService({ feishu, kdzs });
     const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
     const part = (type) => parts.find((item) => item.type === type)?.value;
@@ -64,7 +65,7 @@ async function runDailySync() {
   dailyRunning = true;
   state.dailySyncRunning = true;
   try {
-    const kdzs = await createKdzsFromSessionTable(sourceFeishu, config);
+    const kdzs = await createDeliveryKdzsClient({ feishu: sourceFeishu, config });
     const service = new DeliverySyncService({ feishu, kdzs });
     const previous = previousMonth(new Date());
     const monthParts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit" }).formatToParts(new Date());
@@ -98,7 +99,7 @@ async function checkConnections() {
   state.lastCheckAt = new Date().toISOString();
   try {
     const tables = await feishu.request("GET", `/bitable/v1/apps/${config.feishu.baseToken}/tables?page_size=100`);
-    const kdzs = await createKdzsFromSessionTable(sourceFeishu, config);
+    const kdzs = await createDeliveryKdzsClient({ feishu: sourceFeishu, config });
     const stock = await kdzs.call("kdzs.erp.api.stock.list", { pageNo: 1, pageSize: 1 });
     state.baseTableCount = tables.total ?? tables.items?.length ?? 0;
     state.erpStockTotal = Number(stock.total || 0);
