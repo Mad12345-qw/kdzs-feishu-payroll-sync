@@ -21,6 +21,9 @@ jobs:
           DELIVERY_BASE_TOKEN: ${{ secrets.DELIVERY_BASE_TOKEN }}
           ERP_SOURCE_BASE_TOKEN: ${{ secrets.ERP_SOURCE_BASE_TOKEN }}
           FEISHU_SESSION_TABLE_ID: ${{ secrets.FEISHU_SESSION_TABLE_ID }}
+          KDZS_APP_KEY: ${{ secrets.KDZS_APP_KEY }}
+          KDZS_APP_SECRET: ${{ secrets.KDZS_APP_SECRET }}
+          KDZS_SESSION: ${{ secrets.KDZS_SESSION }}
           REPO_URL: https://github.com/Mad12345-qw/kdzs-feishu-payroll-sync
           SERVICE_NAME: kdzs-feishu-payroll-sync
         run: |
@@ -49,6 +52,9 @@ jobs:
               --arg delivery_base_token "$DELIVERY_BASE_TOKEN" \
               --arg source_base_token "$ERP_SOURCE_BASE_TOKEN" \
               --arg session_table_id "$FEISHU_SESSION_TABLE_ID" \
+              --arg kdzs_app_key "$KDZS_APP_KEY" \
+              --arg kdzs_app_secret "$KDZS_APP_SECRET" \
+              --arg kdzs_session "$KDZS_SESSION" \
               '{
                 type: "web_service",
                 name: $name,
@@ -62,6 +68,9 @@ jobs:
                   {key:"DELIVERY_BASE_TOKEN",value:$delivery_base_token},
                   {key:"ERP_SOURCE_BASE_TOKEN",value:$source_base_token},
                   {key:"FEISHU_SESSION_TABLE_ID",value:$session_table_id},
+                  {key:"KDZS_APP_KEY",value:$kdzs_app_key},
+                  {key:"KDZS_APP_SECRET",value:$kdzs_app_secret},
+                  {key:"KDZS_SESSION",value:$kdzs_session},
                   {key:"SCHEDULER_ENABLED",value:"true"},
                   {key:"SYNC_ENABLED",value:"false"},
                   {key:"HEALTH_INTERVAL_MINUTES",value:"10"},
