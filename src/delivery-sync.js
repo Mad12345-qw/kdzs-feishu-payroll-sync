@@ -2,6 +2,7 @@ import { addDays, dateChunks, dateOnly, endOfDayString, monthBounds, number, par
 
 // 客户交付库：只使用 Bvsz 内已有的业务表。LJB0 仅由 session-provider 读取 ERP 会话。
 export const DELIVERY_TABLES = {
+  dailyOverview: { name: "01_每日财务汇总" },
   storeProfit: { name: "02_店铺利润明细" },
   productProfit: { name: "03_商品利润明细" },
   orders: { name: "06_订单列表" },
@@ -49,6 +50,25 @@ function mapStoreProfit(items, day) {
     "退货毛利": money(item.refundProfit), "实退数量": number(item.hasRefundNum),
     [SYNC_TIME]: Date.now(),
   })), (row) => row[KEY]);
+}
+
+// 客户可见的经营总览按“日期 + 店铺 + 平台”呈现，且只引用同批 ERP 店铺利润数据。
+// 利润率使用百分数（例如 15.87），便于飞书看板直接展示。
+function mapDailyOverview(items, day) {
+  return mapStoreProfit(items, day).map((row) => {
+    const revenue = money(row["实际收入"]) || money(row["净销售额"]) || money(row["销售金额"]);
+    const sales = money(row["销售金额"]) || revenue;
+    const quantity = number(row["销售数量"]);
+    return {
+      ...row,
+      "销售金额": sales,
+      "实发金额": money(row["实发金额"]) || revenue,
+      "利润率": revenue ? roundMoney(money(row["利润"]) / revenue * 100) : 0,
+      "销售毛利率": sales ? roundMoney(money(row["销售毛利"]) / sales * 100) : 0,
+      "销售均价": quantity ? roundMoney(sales / quantity) : 0,
+      "数据来源": "02_店铺利润明细（ERP）",
+    };
+  });
 }
 
 function mapProductProfit(items, day) {
@@ -241,6 +261,7 @@ export class DeliverySyncService {
         this.kdzs.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 8, ...range }),
       ]);
       const result = {
+        dailyOverview: await this.upsert(this.tables.dailyOverview, mapDailyOverview(storeItems, day)),
         storeProfit: await this.upsert(this.tables.storeProfit, mapStoreProfit(storeItems, day)),
         productProfit: await this.writePartition("03_商品利润明细", day, mapProductProfit(productItems, day)),
         orders: await this.writePartition("06_订单列表", day, mapOrders(trades)),
@@ -289,7 +310,11 @@ export class DeliverySyncService {
     const rows = await this.kdzs.listAll("kdzs.erp.api.report.gross.profit", {
       queryTimeType: 3, queryGroupType: 2, startTime: startOfDayString(date), endTime: endOfDayString(date),
     });
+    const overview = await this.upsert(this.tables.dailyOverview, mapDailyOverview(rows, day));
     const write = await this.upsert(this.tables.storeProfit, mapStoreProfit(rows, day));
+    if (overview.failed || overview.created + overview.updated !== overview.total) {
+      throw new Error(`${day} dailyOverview写入不完整：成功${overview.created + overview.updated}/总计${overview.total}，失败${overview.failed}；${overview.failures?.[0]?.reason || "未返回具体原因"}`);
+    }
     if (write.failed || write.created + write.updated !== write.total) {
       throw new Error(`${day} storeProfit写入不完整：成功${write.created + write.updated}/总计${write.total}，失败${write.failed}；${write.failures?.[0]?.reason || "未返回具体原因"}`);
     }
