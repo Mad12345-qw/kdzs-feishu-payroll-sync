@@ -222,7 +222,11 @@ export class DeliverySyncService {
   }
 
   async logDay(day, fields) {
-    return this.upsert(this.tables.logs, [{ "任务键": `day|${day}`, "日期": day, "完成时间": Date.now(), ...fields }], "任务键");
+    const succeeded = fields["状态"] === "成功";
+    return this.upsert(this.tables.logs, [{
+      "任务键": `day|${day}`, "日期": day, "完成时间": Date.now(),
+      ...(succeeded ? { "失败原因": "" } : {}), ...fields,
+    }], "任务键");
   }
 
   async syncDay(day) {
