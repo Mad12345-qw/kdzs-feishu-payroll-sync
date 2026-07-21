@@ -192,6 +192,7 @@ export class DashboardService {
     let basisRows = safeBasis === "monthly" ? monthRows : safeBasis === "shipped" ? yesterdayRows : dayRows;
     let commissionSource = "飞书已同步的 ERP 数据";
     let liveProfitRows = null;
+    let liveTodayProfitRows = null;
     let liveOrderSummary = null;
     try {
       const liveRows = await this.queryCommissionBase({ date: selectedDate, yesterday, month, basis: safeBasis, store, platform });
@@ -200,6 +201,9 @@ export class DashboardService {
         liveProfitRows = liveRows;
         commissionSource = "快递助手 ERP 实时毛利报表";
       }
+      liveTodayProfitRows = safeBasis === "placed"
+        ? liveRows
+        : await this.queryCommissionBase({ date: selectedDate, yesterday, month, basis: "placed", store, platform });
     } catch (error) {
       this.logger.warn(`提成口径实时查询失败，已回退到已同步 ERP 数据：${error.message}`);
     }
@@ -208,7 +212,8 @@ export class DashboardService {
     } catch (error) {
       this.logger.warn(`今日订单实时查询失败，已回退到已同步 ERP 数据：${error.message}`);
     }
-    const profitPending = Boolean(liveOrderSummary?.orderCount > 0 && liveProfitRows && liveProfitRows.length === 0);
+    const profitPending = Boolean(liveOrderSummary?.orderCount > 0 && liveTodayProfitRows && liveTodayProfitRows.length === 0);
+    const commissionPending = safeBasis === "placed" && profitPending;
 
     const people = peopleRecords.map((record) => record.fields || {}).filter((person) => scalar(person["启用提成展示"]) !== "否")
       .filter((person) => store === "全部店铺" || scalar(person["所属店铺"]) === store)
@@ -229,9 +234,9 @@ export class DashboardService {
       }).reduce((total, item) => total + number(item["金额"]), 0);
       return {
         name: scalar(person["姓名"]), role: scalar(person["角色"] || "主播"), store: personStore,
-        rate, profit: profitPending ? null : profit, pending: profitPending,
-        grossCommission: profitPending ? null : money(Math.max(0, profit) * rate), deduction: money(deduction),
-        commission: profitPending ? null : money(Math.max(0, profit) * rate - deduction),
+        rate, profit: commissionPending ? null : profit, pending: commissionPending,
+        grossCommission: commissionPending ? null : money(Math.max(0, profit) * rate), deduction: money(deduction),
+        commission: commissionPending ? null : money(Math.max(0, profit) * rate - deduction),
       };
     });
     const team = ROLE_ORDER.map((teamRole) => {
@@ -266,12 +271,12 @@ export class DashboardService {
 
     const summary = {
       sales: liveOrderSummary?.sales || sum(dayRows, "销售金额") || sum(dayRows, "实际收入") || sum(dayRows, "净销售额"),
-      profit: profitPending ? null : sum(dayRows, "利润"), profitPending,
+      profit: profitPending ? null : (liveTodayProfitRows ? sum(liveTodayProfitRows, "利润") : sum(dayRows, "利润")), profitPending,
       orderCount: liveOrderSummary?.orderCount ?? Math.round(sum(dayRows, "订单数")), shippedCount: Math.round(sum(yesterdayRows, "实发数量")),
       refundAmount: sum(dayRows, "退款金额"), refundCount: Math.round(sum(dayRows, "退款数量")),
       misShipmentLoss: money(selectedDeductions.filter((item) => item.type.includes("错发")).reduce((total, item) => total + item.amount, 0)),
       monthProfit: sum(monthRows, "利润"), yesterdayProfit: sum(yesterdayRows, "利润"),
-      teamCommission: profitPending ? null : money(commissions.reduce((total, item) => total + item.commission, 0)),
+      teamCommission: commissionPending ? null : money(commissions.reduce((total, item) => total + item.commission, 0)),
     };
     const reminders = [];
     if (profitPending) reminders.push(`${selectedDate} 已同步 ${liveOrderSummary.orderCount} 笔订单；ERP 毛利报表尚未生成，利润与提成将在 ERP 返回后自动展示。`);

@@ -62,8 +62,9 @@ test("看板实时提成口径分别请求 ERP 的下单和发货时间类型", 
   const placed = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "placed" });
   const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
   const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
-  assert.deepEqual(calls.filter((item) => item.method === "kdzs.erp.api.report.gross.profit").map((item) => item.params.queryTimeType), [1, 3, 3]);
+  assert.deepEqual(calls.filter((item) => item.method === "kdzs.erp.api.report.gross.profit").map((item) => item.params.queryTimeType), [1, 3, 1, 3, 1]);
   assert.equal(placed.commissions[0].grossCommission, 15);
+  assert.equal(placed.summary.profit, 500);
   assert.equal(shipped.commissions[0].grossCommission, 6);
   assert.equal(monthly.commissions[0].grossCommission, 3);
 });
