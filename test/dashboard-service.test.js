@@ -30,25 +30,25 @@ function fakeFeishu() {
   };
 }
 
-test("经营看板只用 ERP 利润乘人员表比例，并扣除明细表金额", async () => {
+test("经营看板按每件 ERP 利润计算团队提成，并只扣责任人个人金额", async () => {
   const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
   const dashboard = await service.getDashboard({ date: "2026-07-20", store: "测试店", platform: "抖音", basis: "placed" });
   assert.equal(dashboard.summary.sales, 1000);
   assert.equal(dashboard.summary.profit, 200);
   assert.equal(dashboard.summary.shippedCount, 7);
   assert.equal(dashboard.summary.misShipmentLoss, 1);
-  assert.equal(dashboard.commissions[0].grossCommission, 3);
-  assert.equal(dashboard.commissions[0].commission, 2);
+  assert.equal(dashboard.commissions[0].grossCommission, 14.4);
+  assert.equal(dashboard.commissions[0].commission, 13.4);
 });
 
-test("三种提成口径分别使用当日、昨日和整月 ERP 利润", async () => {
+test("三种提成口径均按其范围内订单商品的逐件规则计算", async () => {
   const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
   const placed = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "placed" });
   const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
   const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
-  assert.equal(placed.commissions[0].grossCommission, 3);
-  assert.equal(shipped.commissions[0].grossCommission, 3);
-  assert.equal(monthly.commissions[0].grossCommission, 3);
+  assert.equal(placed.commissions[0].grossCommission, 14.4);
+  assert.equal(shipped.commissions[0].grossCommission, 14.4);
+  assert.equal(monthly.commissions[0].grossCommission, 14.4);
 });
 
 test("看板实时提成口径分别请求 ERP 的下单和发货时间类型", async () => {
@@ -98,6 +98,16 @@ test("单品团队提成先封顶再按 60/25/15 分配，亏损不产生提成"
   assert.equal(capped.teamCommission, 5);
   assert.deepEqual(capped.roleCommission, { "主播": 3, "中控": 1.25, "助播": 0.75 });
   assert.equal(loss.teamCommission, 0);
+});
+
+test("单件封顶按每个订单商品数量累计，不把全天销量只封顶一次", () => {
+  const service = new DashboardService({ feishu: fakeFeishu() });
+  const rules = { "团队计提比例": 0.2, "单件团队封顶": 5, "主播分配比例": 0.6, "中控分配比例": 0.25, "助播分配比例": 0.15 };
+  const [item] = service.calculateProducts([
+    { sellerNick: "测试店", platform: "抖音", itemTitle: "千件商品", skuId: "1000", number: 1000, payment: 100000, netSalesProfit: 100000 },
+  ], rules, [], "2026-07-20", "2026-07-20");
+  assert.equal(item.teamCommission, 5000);
+  assert.deepEqual(item.roleCommission, { "主播": 3000, "中控": 1250, "助播": 750 });
 });
 
 test("员工接口只返回本人店铺和个人提成，不泄露利润、团队提成或全库入口数据", async () => {

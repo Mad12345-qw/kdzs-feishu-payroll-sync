@@ -226,10 +226,22 @@ export class DashboardService {
 
   calculateProducts(rows, rules, people, startDate, endDate) {
     const map = new Map();
+    const splits = { 主播: rules["主播分配比例"], 中控: rules["中控分配比例"], 助播: rules["助播分配比例"] };
     for (const row of rows || []) {
       const key = `${text(row.sellerNick)}|${text(row.platform)}|${text(row.itemTitle)}|${text(row.skuId)}`;
-      const item = map.get(key) || { key, name: text(row.itemTitle) || "未命名商品", sku: text(row.skuId), store: text(row.sellerNick), platform: text(row.platform), quantity: 0, sales: 0, profit: 0 };
-      item.quantity += number(row.number); item.sales += number(row.payment); item.profit += number(row.netSalesProfit);
+      const item = map.get(key) || {
+        key, name: text(row.itemTitle) || "未命名商品", sku: text(row.skuId), store: text(row.sellerNick), platform: text(row.platform),
+        quantity: 0, sales: 0, profit: 0, teamCommission: 0, roleCommission: Object.fromEntries(ROLES.map((role) => [role, 0])),
+      };
+      const quantity = Math.max(0, number(row.number));
+      const profit = number(row.netSalesProfit);
+      // queryGroupType=8 returns an order-product line. Cap each sold unit first, then aggregate it for display.
+      const unitTeamCommission = quantity > 0 && profit > 0
+        ? Math.min((profit / quantity) * rules["团队计提比例"], rules["单件团队封顶"])
+        : 0;
+      const rowTeamCommission = money(unitTeamCommission * quantity);
+      item.quantity += quantity; item.sales += number(row.payment); item.profit += profit; item.teamCommission += rowTeamCommission;
+      for (const role of ROLES) item.roleCommission[role] += money(rowTeamCommission * (splits[role] || 0));
       map.set(key, item);
     }
     const active = people.filter((person) => scalar(person["启用提成展示"]) !== "否");
@@ -238,11 +250,9 @@ export class DashboardService {
       const key = `${scalar(person["所属店铺"])}|${scalar(person["角色"] || "主播")}`;
       membersByStoreRole.set(key, (membersByStoreRole.get(key) || 0) + 1);
     }
-    const splits = { 主播: rules["主播分配比例"], 中控: rules["中控分配比例"], 助播: rules["助播分配比例"] };
     return [...map.values()].map((item) => {
-      const teamCommission = item.profit > 0 ? Math.min(money(item.profit * rules["团队计提比例"]), rules["单件团队封顶"]) : 0;
-      const roleCommission = Object.fromEntries(ROLES.map((role) => [role, money(teamCommission * (splits[role] || 0))]));
-      return { ...item, quantity: Math.round(item.quantity), sales: money(item.sales), profit: money(item.profit), teamCommission, roleCommission, periodStart: startDate, periodEnd: endDate };
+      const roleCommission = Object.fromEntries(ROLES.map((role) => [role, money(item.roleCommission[role]) ]));
+      return { ...item, quantity: Math.round(item.quantity), sales: money(item.sales), profit: money(item.profit), teamCommission: money(item.teamCommission), roleCommission, periodStart: startDate, periodEnd: endDate };
     });
   }
 
