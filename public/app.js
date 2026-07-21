@@ -67,7 +67,7 @@ function renderRules(data) {
 }
 
 function render(data) {
-  const { meta, summary, commissions = [], team = [], deductions = [], products = [], reminders = [], viewer } = data;
+  const { meta, summary, commissions = [], team = [], deductions = [], operationalExceptions = [], products = [], reminders = [], viewer } = data;
   $("#welcome-line").textContent = `${escapeHtml(viewer?.name || "老板")}，欢迎你`;
   $("#data-note").textContent = meta.source;
   $("#data-date").textContent = `${data.period.label} ${data.period.startDate} 至 ${data.period.endDate}`;
@@ -89,21 +89,25 @@ function render(data) {
     $("#store-filter-btn").classList.remove("hidden");
   }
   $("#owner-sales").textContent = currency(summary.sales); $("#owner-profit").textContent = moneyOrPending(summary.profit, summary.profitPending);
-  $("#owner-refund").textContent = currency(summary.refundAmount); $("#owner-loss").textContent = currency(summary.misShipmentLoss); $("#month-profit").textContent = moneyOrPending(summary.monthProfit, summary.profitPending);
+  $("#owner-refund").textContent = currency(summary.refundAmount); $("#owner-loss").textContent = currency(summary.misShipmentLoss); $("#month-profit").textContent = moneyOrPending(summary.monthProfit, summary.monthProfit == null);
+  $("#month-team-commission").textContent = moneyOrPending(summary.monthTeamCommission, summary.monthTeamCommission == null); $("#month-after-sales").textContent = moneyOrPending(summary.monthAfterSalesLoss, summary.monthAfterSalesLoss == null);
   $("#owner-commission-body").innerHTML = commissions.length ? commissions.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.store)}</td><td>${isOwner ? moneyOrPending(item.grossCommission, item.pending) : ""}</td><td class="money">${moneyOrPending(item.commission, item.pending)}</td></tr>`).join("") : emptyRow(5, "暂无人员配置");
-  $("#owner-product-body").innerHTML = products.length ? products.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${escapeHtml(item.store)}</td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td class="money">${currency(item.profit)}</td><td class="money">${currency(item.teamCommission)}</td><td>${currency(item.roleCommission?.主播)}</td><td>${currency(item.roleCommission?.中控)}</td><td>${currency(item.roleCommission?.助播)}</td></tr>`).join("") : emptyRow(9, summary.profitPending ? "ERP 毛利报表生成后自动展示商品提成" : "暂无商品利润明细");
+  $("#owner-product-body").innerHTML = products.length ? products.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${escapeHtml(item.store)}</td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td>${currency(item.cost)}</td><td class="money">${currency(item.profit)}</td><td class="money">${currency(item.teamCommission)}</td><td>${currency(item.roleCommission?.主播)}</td><td>${currency(item.roleCommission?.中控)}</td><td>${currency(item.roleCommission?.助播)}</td></tr>`).join("") : emptyRow(10, summary.profitPending ? "ERP 毛利报表生成后自动展示商品提成" : "暂无商品利润明细");
+  $("#owner-exception-body").innerHTML = isOwner && operationalExceptions.length ? operationalExceptions.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.orderNo)}</td><td>${escapeHtml(item.store || "—")}</td><td>${escapeHtml(item.name || "—")}</td><td>${escapeHtml(item.reason || "—")}</td><td>${escapeHtml(item.status || "—")}</td><td class="money">${currency(item.amount)}</td></tr>`).join("") : emptyRow(7, "当前筛选期间暂无售后或错发明细");
   $("#reminder-list").innerHTML = reminders.map((item) => `<div class="reminder">${escapeHtml(item)}</div>`).join("");
 
   const mine = commissions[0];
-  $("#stream-orders").textContent = integer(summary.orderCount, " 单"); $("#stream-sales").textContent = currency(summary.sales); $("#stream-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending); $("#stream-rate").textContent = "今日个人预估"; $("#stream-shipped").textContent = integer(summary.shippedCount, " 件");
+  $("#stream-orders").textContent = integer(summary.orderCount, " 单"); $("#stream-sales").textContent = currency(summary.sales); $("#stream-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending); $("#stream-rate").textContent = "今日个人预估"; $("#stream-yesterday-commission").textContent = moneyOrPending(summary.yesterdayShippedCommission, summary.yesterdayShippedPending); $("#stream-shipped").textContent = `昨日 ERP 实发 ${integer(summary.shippedCount, " 件")}`;
   $("#stream-product-body").innerHTML = products.length ? products.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td class="money">${moneyOrPending(item.personalCommission, summary.profitPending)}</td></tr>`).join("") : emptyRow(4, summary.profitPending ? "等待 ERP 单品利润生成" : "暂无今日商品数据");
   $("#stream-income").innerHTML = mine ? `<span>${escapeHtml(mine.name)} · ${escapeHtml(mine.store)}</span><strong>${moneyOrPending(mine.commission, mine.pending)}</strong><small>只显示本人到手提成与本人责任扣款</small>` : `<span>本人预估提成</span><strong>待配置</strong><small>请在人员表配置登录账号与 PIN</small>`;
   renderDetails($("#stream-deductions"), deductions, "当前没有本人扣款");
-  $("#control-orders").textContent = integer(summary.orderCount, " 单"); $("#control-shipped").textContent = integer(summary.shippedCount, " 件"); $("#control-refunds").textContent = integer(summary.refundCount, " 单"); $("#control-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending);
+  $("#control-orders").textContent = integer(summary.orderCount, " 单"); $("#control-shipped").textContent = integer(summary.shippedCount, " 件"); $("#control-refunds").textContent = integer(summary.refundCount, " 单"); $("#control-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending); renderDetails($("#control-deductions"), deductions, "当前没有本人扣款");
+  $("#control-exception-body").innerHTML = operationalExceptions.length ? operationalExceptions.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.orderNo)}</td><td>${escapeHtml(item.store || "—")}</td><td>${escapeHtml(item.reason || "—")}</td><td>${escapeHtml(item.status || "—")}</td></tr>`).join("") : emptyRow(5, "当前筛选期间暂无店铺异常");
   $("#team-cards").innerHTML = mine ? `<div class="team-card"><span>${escapeHtml(mine.name)} · ${escapeHtml(mine.role)}</span><strong>${moneyOrPending(mine.commission, mine.pending)}</strong></div>` : `<div class="team-card"><span>本人账号未配置</span><strong>—</strong></div>`;
   $("#collab-product-body").innerHTML = products.length ? products.map((item, index) => `<tr><td>${index + 1}</td><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td>${meta.isOwner ? currency(item.profit) : "—"}</td><td>${meta.isOwner ? currency(item.teamCommission) : moneyOrPending(item.personalCommission, summary.profitPending)}</td><td><span class="pill">已同步</span></td></tr>`).join("") : emptyRow(7);
-  const feishuUrl = data.links?.feishu || ""; const doubaoUrl = data.links?.doubao || "https://www.doubao.com/";
+  const feishuUrl = data.links?.feishu || ""; const planUrl = data.links?.plan || ""; const doubaoUrl = data.links?.doubao || "https://www.doubao.com/";
   if (feishuUrl) ["#feishu-link", "#collab-feishu"].forEach((id) => $(id).href = feishuUrl); ["#doubao-link", "#owner-doubao", "#collab-doubao", "#collab-ai"].forEach((id) => $(id).href = doubaoUrl);
+  $("#collab-plan").classList.toggle("hidden", !isOwner || !planUrl); if (planUrl) $("#collab-plan").href = planUrl;
   if (!isOwner) { switchView(employeeView); $("#owner-rules-panel").classList.add("hidden"); }
   if (window.lucide) window.lucide.createIcons();
 }

@@ -228,7 +228,7 @@ const server = http.createServer(async (request, response) => {
       });
       // 员工端不返回全量多维表格入口，避免通过原始表绕过个人数据隔离。
       data.links = viewer.scope === "owner"
-        ? { feishu: config.runtime.feishuBaseUrl, doubao: config.runtime.doubaoAiUrl }
+        ? { feishu: config.runtime.feishuBaseUrl, plan: data.meta.plansTableId ? `${config.runtime.feishuBaseUrl}?table=${data.meta.plansTableId}` : "", doubao: config.runtime.doubaoAiUrl }
         : { doubao: config.runtime.doubaoAiUrl };
       return json(response, 200, data);
     } catch (error) {

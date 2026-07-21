@@ -122,6 +122,9 @@ h2 { margin-bottom: 0; font-size: 20px; letter-spacing: -.02em; }
 .metric-card.emphasis { background: linear-gradient(145deg, rgba(255,126,41,.13), rgba(26,31,42,.96) 45%, rgba(45,125,255,.1)); }
 .month-card { min-height: 238px; }
 .month-card > small { margin-top: 42px; }
+.month-breakdown { display: grid; gap: 7px; margin-top: 16px; color: var(--muted); font-size: 11px; }
+.month-breakdown span { display: flex; justify-content: space-between; gap: 12px; }
+.month-breakdown b { color: #dce4f1; font-weight: 700; }
 .metric-icon { display: inline-grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; }
 .metric-icon svg { width: 19px; }
 .metric-icon.orange { color: #ffc28b; background: rgba(255,130,42,.14); }
@@ -164,6 +167,7 @@ td.money { color: #ffad63; font-weight: 700; }
 .collab-banner h2 { font-size: 30px; }
 .collab-banner p:last-child { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
 .collab-banner .action-button { flex: 0 0 auto; margin: 0; padding: 0 18px; }
+.collab-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
 .quick-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 16px; }
 .quick-actions a { display: flex; align-items: center; gap: 13px; padding: 18px; border-radius: 16px; background: rgba(25,30,41,.9); }
 .quick-actions a > svg { margin-left: auto; width: 18px; color: var(--muted); }

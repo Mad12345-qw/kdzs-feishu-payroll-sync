@@ -63,7 +63,10 @@ test("看板实时提成口径分别请求 ERP 的下单和发货时间类型", 
   const placed = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "placed" });
   const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
   const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
-  assert.deepEqual(calls.filter((item) => item.method === "kdzs.erp.api.report.gross.profit").map((item) => item.params.queryTimeType), [1, 1, 3, 3, 3, 3]);
+  const profitTypes = calls.filter((item) => item.method === "kdzs.erp.api.report.gross.profit").map((item) => item.params.queryTimeType);
+  assert.deepEqual(profitTypes.slice(0, 2), [1, 1]);
+  assert.equal(profitTypes.filter((type) => type === 1).length, 2);
+  assert.equal(profitTypes.slice(2).every((type) => type === 3), true);
   assert.equal(placed.commissions[0].grossCommission, 3);
   assert.equal(placed.summary.profit, 500);
   assert.equal(shipped.commissions[0].grossCommission, 3);
@@ -81,6 +84,22 @@ test("当天订单已同步但 ERP 毛利未生成时，不把利润和提成显
   assert.equal(dashboard.summary.profitPending, true);
   assert.equal(dashboard.summary.profit, null);
   assert.equal(dashboard.commissions[0].commission, null);
+});
+
+test("昨日实发提成和本月经营汇总分别按独立日期范围读取", async () => {
+  const kdzs = { listAll: async (method, params = {}) => {
+    if (method === "kdzs.erp.api.trade.list" || method === "kdzs.erp.api.refund.list") return [];
+    const day = String(params.startTime || "").slice(0, 10);
+    const profit = day === "2026-07-19" ? 50 : day === "2026-07-01" ? 500 : 100;
+    if (params.queryGroupType === 8) return [{ sellerNick: "测试店", platform: "抖音", itemTitle: "商品A", skuId: day, number: 1, payment: profit, netSalesProfit: profit }];
+    return [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: profit }];
+  } };
+  const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
+  const owner = await service.getDashboard({ date: "2026-07-20", store: "测试店", viewer: { scope: "owner", name: "老板", role: "老板", store: "全部店铺" } });
+  const employee = await service.getDashboard({ date: "2026-07-20", store: "测试店", viewer: { scope: "employee", name: "主播A", role: "主播", store: "测试店" } });
+  assert.equal(owner.summary.monthProfit, 500);
+  assert.equal(owner.summary.monthTeamCommission, 5);
+  assert.equal(employee.summary.yesterdayShippedCommission, 3);
 });
 
 test("单品团队提成先封顶再按 60/25/15 分配，亏损不产生提成", () => {

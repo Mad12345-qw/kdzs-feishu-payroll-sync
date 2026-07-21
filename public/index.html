@@ -75,7 +75,7 @@
                 <div><small>错发损耗</small><strong id="owner-loss">—</strong></div>
               </div>
             </article>
-            <article class="metric-card month-card"><span class="metric-icon blue"><i data-lucide="calendar-range"></i></span><small>本月 ERP 利润</small><strong id="month-profit">—</strong><p>已包含 ERP 售后结果</p></article>
+            <article class="metric-card month-card"><span class="metric-icon blue"><i data-lucide="calendar-range"></i></span><small>本月 ERP 利润</small><strong id="month-profit">—</strong><div class="month-breakdown"><span>团队提成 <b id="month-team-commission">—</b></span><span>售后退款 <b id="month-after-sales">—</b></span></div></article>
           </div>
 
           <div class="content-grid two-thirds">
@@ -89,7 +89,8 @@
               <a class="action-button" id="owner-doubao" target="_blank" rel="noreferrer"><i data-lucide="sparkles"></i>交给豆包继续分析<i data-lucide="arrow-up-right"></i></a>
             </article>
           </div>
-          <article class="panel owner-product-panel"><div class="panel-head"><div><p class="eyebrow">完整明细</p><h2>商品利润与团队提成</h2></div><span class="pill">老板全量可见</span></div><div class="table-wrap wide"><table><thead><tr><th>商品</th><th>店铺</th><th>销量</th><th>销售额</th><th>ERP净利润</th><th>团队提成</th><th>主播</th><th>中控</th><th>助播</th></tr></thead><tbody id="owner-product-body"></tbody></table></div></article>
+          <article class="panel owner-product-panel"><div class="panel-head"><div><p class="eyebrow">完整明细</p><h2>商品利润与团队提成</h2></div><span class="pill">老板全量可见</span></div><div class="table-wrap wide"><table><thead><tr><th>商品</th><th>店铺</th><th>销量</th><th>销售额</th><th>ERP成本</th><th>ERP净利润</th><th>团队提成</th><th>主播</th><th>中控</th><th>助播</th></tr></thead><tbody id="owner-product-body"></tbody></table></div></article>
+          <article class="panel owner-product-panel"><div class="panel-head"><div><p class="eyebrow">售后与异常</p><h2>退款、错发和责任扣款明细</h2></div><span class="pill">老板全量可见</span></div><div class="table-wrap wide"><table><thead><tr><th>类型</th><th>订单/日期</th><th>店铺</th><th>责任人</th><th>原因/说明</th><th>状态</th><th>金额</th></tr></thead><tbody id="owner-exception-body"></tbody></table></div></article>
           <article class="panel owner-rules-panel" id="owner-rules-panel">
             <div class="panel-head"><div><p class="eyebrow">后台规则配置</p><h2>团队提成方案</h2></div><span class="pill">只对老板可见</span></div>
             <div class="rule-form"><label>团队比例<input id="rule-team-rate" type="number" min="0" max="100" step="1"></label><label>单件封顶<input id="rule-cap" type="number" min="0" step="0.01"></label><label>主播分配<input id="rule-streamer-split" type="number" min="0" max="100" step="1"></label><label>中控分配<input id="rule-control-split" type="number" min="0" max="100" step="1"></label><label>助播分配<input id="rule-assistant-split" type="number" min="0" max="100" step="1"></label><label>生效日期<input id="rule-effective-date" type="date"></label><button id="save-rules-btn" class="action-button">保存方案</button></div>
@@ -102,7 +103,7 @@
             <article class="metric-card"><span class="metric-icon orange"><i data-lucide="shopping-bag"></i></span><small>今日订单</small><strong id="stream-orders">—</strong><p>ERP 同步订单</p></article>
             <article class="metric-card"><span class="metric-icon blue"><i data-lucide="badge-dollar-sign"></i></span><small>今日销售额</small><strong id="stream-sales">—</strong><p>不做二次核算</p></article>
             <article class="metric-card emphasis"><span class="metric-icon orange"><i data-lucide="coins"></i></span><small>我的预估提成</small><strong id="stream-commission">—</strong><p id="stream-rate">按人员表比例</p></article>
-            <article class="metric-card"><span class="metric-icon blue"><i data-lucide="package-check"></i></span><small>昨日实际发货</small><strong id="stream-shipped">—</strong><p>昨日 ERP 实发数量</p></article>
+            <article class="metric-card emphasis"><span class="metric-icon blue"><i data-lucide="package-check"></i></span><small>昨日实发到手提成</small><strong id="stream-yesterday-commission">—</strong><p id="stream-shipped">昨日 ERP 实发数量</p></article>
           </div>
           <div class="content-grid two-thirds">
             <article class="panel"><div class="panel-head"><div><p class="eyebrow">我的商品</p><h2>今日个人预估提成</h2></div><span class="pill">仅展示本人</span></div><div class="table-wrap"><table><thead><tr><th>商品</th><th>销量</th><th>销售额</th><th>我的预估提成</th></tr></thead><tbody id="stream-product-body"></tbody></table></div></article>
@@ -121,12 +122,13 @@
             <article class="panel"><div class="panel-head"><div><p class="eyebrow">个人收入</p><h2>我的提成与扣款</h2></div><span class="pill">仅展示本人</span></div><div id="team-cards" class="team-cards"></div></article>
             <article class="panel"><div class="panel-head"><div><p class="eyebrow">待处理</p><h2>扣款与异常明细</h2></div><span class="metric-icon orange"><i data-lucide="triangle-alert"></i></span></div><div id="control-deductions" class="detail-list"></div></article>
           </div>
+          <article class="panel owner-product-panel"><div class="panel-head"><div><p class="eyebrow">店铺异常</p><h2>订单、售后与错发明细</h2></div><span class="pill">不展示成本和金额</span></div><div class="table-wrap wide"><table><thead><tr><th>类型</th><th>订单/日期</th><th>店铺</th><th>原因/说明</th><th>状态</th></tr></thead><tbody id="control-exception-body"></tbody></table></div></article>
         </section>
 
         <section class="view" id="view-collab">
           <div class="collab-banner">
             <div><p class="eyebrow">今日直播方案</p><h2>三人只看同一份 ERP 原始数据</h2><p>主播、中控、助播的选品与话术由豆包生成；本系统不再自研分析算法。</p></div>
-            <a class="action-button light" id="collab-doubao" target="_blank" rel="noreferrer"><i data-lucide="sparkles"></i>生成今日排品<i data-lucide="arrow-up-right"></i></a>
+            <div class="collab-actions"><a class="action-button light" id="collab-plan" target="_blank" rel="noreferrer"><i data-lucide="calendar-check"></i>共享直播计划表<i data-lucide="arrow-up-right"></i></a><a class="action-button light" id="collab-doubao" target="_blank" rel="noreferrer"><i data-lucide="sparkles"></i>生成今日排品<i data-lucide="arrow-up-right"></i></a></div>
           </div>
           <article class="panel" id="collab-data-panel"><div class="panel-head"><div><p class="eyebrow">共享数据源</p><h2>商品 · 销量 · 库存 · ERP 利润</h2></div><span class="pill">同步到飞书</span></div><div class="table-wrap wide"><table><thead><tr><th>顺序</th><th>商品名称</th><th>今日销量</th><th>销售额</th><th>库存</th><th>ERP 利润</th><th>数据状态</th></tr></thead><tbody id="collab-product-body"></tbody></table></div></article>
           <div class="quick-actions">

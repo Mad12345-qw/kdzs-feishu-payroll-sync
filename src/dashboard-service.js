@@ -7,6 +7,7 @@ const TABLE_NAMES = {
   stock: "10_库存快照",
   deductions: "18_提成扣款明细",
   rules: "20_提成规则配置",
+  plans: "21_直播计划表",
 };
 
 const ROLES = ["主播", "中控", "助播"];
@@ -128,7 +129,13 @@ export class DashboardService {
     this.tables[TABLE_NAMES.rules] = rulesTable;
     const rules = await this.feishu.listRecords(rulesTable.table_id);
     if (!rules.length) await this.feishu.batchCreateSafe(rulesTable.table_id, Object.entries(DEFAULT_RULES).map(([name, value]) => ({ "规则项": name, "数值": value, "生效日期": Date.now(), "状态": "启用", "说明": "系统默认规则，可由老板后台修改" })));
-    return { people: personRecords.length, deductionsTable: deductions.table_id, rulesTable: rulesTable.table_id };
+    const plans = await this.feishu.ensureTable(TABLE_NAMES.plans, [
+      { field_name: "计划日期", type: 5 }, { field_name: "店铺", type: 1 }, { field_name: "直播主题", type: 1 },
+      { field_name: "主推商品", type: 1 }, { field_name: "主播安排", type: 1 }, { field_name: "中控安排", type: 1 },
+      { field_name: "助播安排", type: 1 }, { field_name: "直播目标", type: 1 }, { field_name: "状态", type: 3 }, { field_name: "备注", type: 1 },
+    ]);
+    this.tables[TABLE_NAMES.plans] = plans;
+    return { people: personRecords.length, deductionsTable: deductions.table_id, rulesTable: rulesTable.table_id, plansTable: plans.table_id };
   }
 
   async records(name) {
@@ -231,7 +238,7 @@ export class DashboardService {
       const key = `${text(row.sellerNick)}|${text(row.platform)}|${text(row.itemTitle)}|${text(row.skuId)}`;
       const item = map.get(key) || {
         key, name: text(row.itemTitle) || "未命名商品", sku: text(row.skuId), store: text(row.sellerNick), platform: text(row.platform),
-        quantity: 0, sales: 0, profit: 0, teamCommission: 0, roleCommission: Object.fromEntries(ROLES.map((role) => [role, 0])),
+        quantity: 0, sales: 0, cost: 0, profit: 0, teamCommission: 0, roleCommission: Object.fromEntries(ROLES.map((role) => [role, 0])),
       };
       const quantity = Math.max(0, number(row.number));
       const profit = number(row.netSalesProfit);
@@ -240,7 +247,7 @@ export class DashboardService {
         ? Math.min((profit / quantity) * rules["团队计提比例"], rules["单件团队封顶"])
         : 0;
       const rowTeamCommission = money(unitTeamCommission * quantity);
-      item.quantity += quantity; item.sales += number(row.payment); item.profit += profit; item.teamCommission += rowTeamCommission;
+      item.quantity += quantity; item.sales += number(row.payment); item.cost += number(row.actualCost ?? row.netSalesCost ?? row.costPrice ?? row.cost); item.profit += profit; item.teamCommission += rowTeamCommission;
       for (const role of ROLES) item.roleCommission[role] += money(rowTeamCommission * (splits[role] || 0));
       map.set(key, item);
     }
@@ -252,7 +259,7 @@ export class DashboardService {
     }
     return [...map.values()].map((item) => {
       const roleCommission = Object.fromEntries(ROLES.map((role) => [role, money(item.roleCommission[role]) ]));
-      return { ...item, quantity: Math.round(item.quantity), sales: money(item.sales), profit: money(item.profit), teamCommission: money(item.teamCommission), roleCommission, periodStart: startDate, periodEnd: endDate };
+      return { ...item, quantity: Math.round(item.quantity), sales: money(item.sales), cost: money(item.cost), profit: money(item.profit), teamCommission: money(item.teamCommission), roleCommission, periodStart: startDate, periodEnd: endDate };
     });
   }
 
@@ -262,7 +269,7 @@ export class DashboardService {
     const key = JSON.stringify({ ...range, store, platform, basis: safeBasis, viewer });
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.time < this.cacheMs) return cached.value;
-    await this.ensureConfiguration();
+    const configuration = await this.ensureConfiguration();
     const [peopleRecords, overviewRecords, stockRecords, deductionRecords] = await Promise.all([
       this.records(TABLE_NAMES.people), this.records(TABLE_NAMES.overview), this.records(TABLE_NAMES.stock), this.records(TABLE_NAMES.deductions),
     ]);
@@ -271,23 +278,34 @@ export class DashboardService {
     const effectiveStore = isOwner ? store : viewer.store;
     const client = await this.queryClient();
     const queryType = safeBasis === "placed" ? 1 : 3;
-    const [ordersLive, profitRowsLive, productRowsLive, refundsLive] = await Promise.all([
+    const previousDate = dateOnly(new Date(new Date(`${range.startDate}T00:00:00+08:00`).getTime() - 86400000));
+    const monthRange = { startDate: `${range.endDate.slice(0, 7)}-01`, endDate: range.endDate };
+    const [[ordersLive, profitRowsLive, productRowsLive, refundsLive, yesterdayProductRowsLive], monthly] = await Promise.all([
+      Promise.all([
       this.queryOrders(client, range.startDate, range.endDate, effectiveStore, platform),
       this.queryProfit(client, range.startDate, range.endDate, queryType, effectiveStore, platform),
       this.queryProducts(client, range.startDate, range.endDate, queryType, effectiveStore, platform),
       this.queryRefunds(client, range.startDate, range.endDate, effectiveStore),
+      this.queryProducts(client, previousDate, previousDate, 3, effectiveStore, platform),
+      ]),
+      isOwner ? Promise.all([
+        this.queryProfit(client, monthRange.startDate, monthRange.endDate, 3, effectiveStore, platform),
+        this.queryProducts(client, monthRange.startDate, monthRange.endDate, 3, effectiveStore, platform),
+        this.queryRefunds(client, monthRange.startDate, monthRange.endDate, effectiveStore),
+      ]) : Promise.resolve([null, null, null]),
     ]);
     const allOverview = overviewRecords.map((record) => record.fields || {});
     const inScope = (row) => (effectiveStore === "全部店铺" || scalar(row["店铺名称"]) === effectiveStore)
       && (platform === "全部平台" || scalar(row["平台类型"]) === platform);
     const overview = allOverview.filter((row) => recordDate(row) >= range.startDate && recordDate(row) <= range.endDate && inScope(row));
-    const previousDate = dateOnly(new Date(new Date(`${range.startDate}T00:00:00+08:00`).getTime() - 86400000));
     const previousRows = allOverview.filter((row) => recordDate(row) === previousDate && (effectiveStore === "全部店铺" || scalar(row["店铺名称"]) === effectiveStore) && (platform === "全部平台" || scalar(row["平台类型"]) === platform));
     const orders = ordersLive || { orderCount: Math.round(sum(overview, "订单数")), sales: sum(overview, "销售金额"), rows: [] };
     const profitRows = profitRowsLive || overview.map((row) => ({ sellerNick: row["店铺名称"], platform: row["平台类型"], netSalesProfit: row["利润"] }));
-    const productRows = (productRowsLive || await this.mirrorProductRows(range.startDate, range.endDate)).filter((row) =>
+    const scopedProductRows = (rows) => (rows || []).filter((row) =>
       (effectiveStore === "全部店铺" || text(row.sellerNick) === effectiveStore)
       && (platform === "全部平台" || text(row.platform) === platform));
+    const productRows = scopedProductRows(productRowsLive || await this.mirrorProductRows(range.startDate, range.endDate));
+    const yesterdayProductRows = scopedProductRows(yesterdayProductRowsLive || await this.mirrorProductRows(previousDate, previousDate));
     const refunds = refundsLive || [];
     const scopedPeople = people.filter((person) => scalar(person["启用提成展示"]) !== "否")
       .filter((person) => viewer.scope === "owner" || scalar(person["姓名"]) === viewer.name)
@@ -296,31 +314,46 @@ export class DashboardService {
     const rules = await this.getRules(range.endDate);
     const products = this.calculateProducts(productRows || [], rules, people, range.startDate, range.endDate);
     const profitPending = Boolean(ordersLive?.orderCount > 0 && profitRowsLive && profitRowsLive.length === 0);
-    const deductions = deductionRecords.map((record) => record.fields || {}).filter((row) => {
-      const d = recordDate(row); return d >= range.startDate && d <= range.endDate && (effectiveStore === "全部店铺" || scalar(row["店铺"]) === effectiveStore);
+    const scopedDeductions = (start, end) => deductionRecords.map((record) => record.fields || {}).filter((row) => {
+      const d = recordDate(row); return d >= start && d <= end && (effectiveStore === "全部店铺" || scalar(row["店铺"]) === effectiveStore);
     });
-    const deductionFor = (name) => money(deductions.filter((row) => scalar(row["姓名"]) === name).reduce((total, row) => total + number(row["金额"]), 0));
-    const commissions = scopedPeople.map((person) => {
+    const deductions = scopedDeductions(range.startDate, range.endDate);
+    const yesterdayDeductions = scopedDeductions(previousDate, previousDate);
+    const calculateCommissions = (sourceProducts, sourceDeductions, pending) => scopedPeople.map((person) => {
       const name = scalar(person["姓名"]); const role = scalar(person["角色"] || "主播"); const personStore = scalar(person["所属店铺"]);
       const members = people.filter((item) => scalar(item["所属店铺"]) === personStore && scalar(item["角色"] || "主播") === role && scalar(item["启用提成展示"]) !== "否").length || 1;
-      const gross = profitPending && safeBasis === "placed" ? null : money(products.filter((item) => item.store === personStore).reduce((total, item) => total + number(item.roleCommission[role]) / members, 0));
-      const deduction = deductionFor(name);
+      const gross = pending ? null : money(sourceProducts.filter((item) => item.store === personStore).reduce((total, item) => total + number(item.roleCommission[role]) / members, 0));
+      const deduction = money(sourceDeductions.filter((row) => scalar(row["姓名"]) === name).reduce((total, row) => total + number(row["金额"]), 0));
       return { name, role, store: personStore, grossCommission: gross, deduction, pending: gross == null, commission: gross == null ? null : money(Math.max(0, gross - deduction)) };
     });
+    const commissions = calculateCommissions(products, deductions, profitPending && safeBasis === "placed");
+    const yesterdayProducts = this.calculateProducts(yesterdayProductRows, rules, people, previousDate, previousDate);
+    const yesterdayPending = Boolean(Math.round(sum(previousRows, "实发数量")) > 0 && yesterdayProductRowsLive && yesterdayProductRowsLive.length === 0);
+    const yesterdayCommissions = calculateCommissions(yesterdayProducts, yesterdayDeductions, yesterdayPending);
     const employeeProducts = products.filter((item) => isOwner || item.store === viewer.store).map((item) => {
       const role = viewer.role || "主播"; const members = people.filter((person) => scalar(person["所属店铺"]) === item.store && scalar(person["角色"] || "主播") === role && scalar(person["启用提成展示"]) !== "否").length || 1;
       const personal = money(number(item.roleCommission[role]) / members); return isOwner ? { ...item, personalByRole: Object.fromEntries(ROLES.map((r) => [r, item.roleCommission[r]])) } : { key: item.key, name: item.name, sku: item.sku, quantity: item.quantity, sales: item.sales, personalCommission: personal };
     });
     const totalTeamCommission = profitPending && safeBasis === "placed" ? null : money(products.reduce((total, item) => total + item.teamCommission, 0));
     const profit = money((profitRows || []).reduce((total, row) => total + number(row.netSalesProfit), 0));
+    const [monthProfitRowsLive, monthProductRowsLive, monthRefundsLive] = monthly;
+    const monthProfit = money((monthProfitRowsLive || []).reduce((total, row) => total + number(row.netSalesProfit), 0));
+    const monthProducts = isOwner ? this.calculateProducts(scopedProductRows(monthProductRowsLive || await this.mirrorProductRows(monthRange.startDate, monthRange.endDate)), rules, people, monthRange.startDate, monthRange.endDate) : [];
+    const monthDeductions = isOwner ? scopedDeductions(monthRange.startDate, monthRange.endDate) : [];
     const fallbackOrders = overview.reduce((total, row) => total + number(row["订单数"]), 0);
     const summary = {
       orderCount: orders?.orderCount ?? fallbackOrders, sales: orders?.sales ?? sum(overview, "销售金额"),
       profit: profitPending ? null : profit, profitPending, refundAmount: money((refunds || []).reduce((total, row) => total + number(row.refundAmount), 0)), refundCount: refunds?.length ?? 0,
       shippedCount: Math.round(sum(previousRows, "实发数量")), teamCommission: totalTeamCommission,
-      monthProfit: profit, afterSalesLoss: money((refunds || []).reduce((total, row) => total + number(row.refundAmount), 0)), misShipmentLoss: money(deductions.filter((row) => scalar(row["类型"]).includes("错发")).reduce((total, row) => total + number(row["金额"]), 0)),
+      monthProfit: monthProfitRowsLive ? monthProfit : null, monthTeamCommission: monthProductRowsLive ? money(monthProducts.reduce((total, item) => total + item.teamCommission, 0)) : null,
+      monthAfterSalesLoss: monthRefundsLive ? money((monthRefundsLive || []).reduce((total, row) => total + number(row.refundAmount), 0)) : null,
+      afterSalesLoss: money((refunds || []).reduce((total, row) => total + number(row.refundAmount), 0)), misShipmentLoss: money(deductions.filter((row) => scalar(row["类型"]).includes("错发")).reduce((total, row) => total + number(row["金额"]), 0)),
     };
     const visibleDeductions = deductions.filter((row) => isOwner || scalar(row["姓名"]) === viewer.name).map((row) => ({ date: recordDate(row), name: scalar(row["姓名"]), role: scalar(row["角色"]), type: scalar(row["类型"] || "其他"), amount: money(row["金额"]), note: scalar(row["说明"]), status: scalar(row["状态"] || "已记录") }));
+    const afterSalesDetails = (refunds || []).map((row) => ({ orderNo: text(row.tid || row.orderId || row.tradeId || row.refundId || "—"), store: text(row.sellerNick), reason: text(row.reason || row.refundReason || row.remark || "售后退款"), status: text(row.refundStatus || row.status || "处理中"), amount: money(row.refundAmount) }));
+    const operationalExceptions = isOwner
+      ? [...afterSalesDetails.map((item) => ({ ...item, type: "售后退款" })), ...visibleDeductions.map((item) => ({ orderNo: item.date || "—", store: "", reason: item.note, status: item.status, amount: item.amount, type: item.type, name: item.name }))]
+      : viewer.role === "中控" ? [...afterSalesDetails.map(({ amount, ...item }) => ({ ...item, type: "售后退款" })), ...deductions.map((row) => ({ orderNo: recordDate(row) || "—", store: scalar(row["店铺"]), reason: scalar(row["说明"]), status: scalar(row["状态"] || "已记录"), type: scalar(row["类型"] || "异常") }))] : [];
     const activePeople = people.filter((person) => scalar(person["启用提成展示"]) !== "否");
     const configurationReminders = [...new Set(activePeople.map((person) => scalar(person["所属店铺"])).filter(Boolean))].flatMap((personStore) => {
       const missing = ROLES.filter((role) => !activePeople.some((person) => scalar(person["所属店铺"]) === personStore && scalar(person["角色"] || "主播") === role));
@@ -328,14 +361,15 @@ export class DashboardService {
     });
     const response = {
       viewer, period: range, rules: isOwner ? rules : null,
-      meta: { selectedDate: range.endDate, latestDataDate: range.endDate, basis: safeBasis, basisLabel: safeBasis === "placed" ? "下单成交" : safeBasis === "shipped" ? "已发货" : "月度扣售后", source: "快递助手 ERP 原始接口 → 飞书同步", generatedAt: new Date().toISOString(), isOwner },
+      meta: { selectedDate: range.endDate, latestDataDate: range.endDate, basis: safeBasis, basisLabel: safeBasis === "placed" ? "下单成交" : safeBasis === "shipped" ? "已发货" : "月度扣售后", source: "快递助手 ERP 原始接口 → 飞书同步", generatedAt: new Date().toISOString(), isOwner, plansTableId: configuration.plansTable },
       filters: { stores: isOwner ? [...new Set(people.map((row) => scalar(row["所属店铺"])).filter(Boolean))].sort() : [viewer.store], platforms: [...new Set([...(productRows || []).map((row) => text(row.platform)), ...overview.map((row) => scalar(row["平台类型"]))].filter(Boolean))].sort(), roles: isOwner ? ROLES : [viewer.role] },
-      summary: isOwner ? summary : { orderCount: summary.orderCount, sales: summary.sales, shippedCount: summary.shippedCount, refundCount: viewer.role === "中控" ? summary.refundCount : undefined },
+      summary: isOwner ? summary : { orderCount: summary.orderCount, sales: summary.sales, shippedCount: summary.shippedCount, yesterdayShippedCommission: yesterdayCommissions[0]?.commission ?? null, yesterdayShippedPending: yesterdayCommissions[0]?.pending ?? yesterdayPending, refundCount: viewer.role === "中控" ? summary.refundCount : undefined },
       commissions: commissions.map((item) => isOwner ? item : { name: item.name, role: item.role, store: item.store, pending: item.pending, commission: item.commission }),
       team: isOwner ? ROLES.map((role) => ({ role, pending: commissions.some((item) => item.role === role && item.pending), commission: commissions.some((item) => item.role === role && item.pending) ? null : money(commissions.filter((item) => item.role === role).reduce((total, item) => total + number(item.commission), 0)) })).filter((item) => item.commission != null || item.pending || people.some((p) => scalar(p["角色"]) === item.role)) : [],
       deductions: visibleDeductions,
+      operationalExceptions,
       products: employeeProducts,
-      reminders: isOwner ? [`${range.label} ERP 利润与售后均来自快递助手原始返回；错发扣款只从责任人个人提成扣除。`, ...configurationReminders] : [],
+      reminders: isOwner ? [`${range.label} ERP 利润与售后均来自快递助手原始返回；错发扣款只从责任人个人提成扣除。`, ...(summary.misShipmentLoss > 0 ? [`本期错发损耗 ¥${summary.misShipmentLoss.toFixed(2)}；减少错发可直接增收同等金额。`] : []), ...configurationReminders] : [],
     };
     this.cache.set(key, { time: Date.now(), value: response });
     return response;
