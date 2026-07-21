@@ -7,6 +7,7 @@ const state = { data: null, view: initialView, access: initialParams.get("access
 if (state.access) sessionStorage.setItem("dashboardAccess", state.access);
 
 const currency = (value) => `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const moneyOrPending = (value, pending) => pending ? "待生成" : currency(value);
 const integer = (value, suffix = "") => `${Number(value || 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 })}${suffix}`;
 const percent = (value) => `${(Number(value || 0) * 100).toFixed(2).replace(/\.00$/, "")}%`;
 const emptyRow = (columns, label = "当前筛选条件下暂无数据") => `<tr class="empty-row"><td colspan="${columns}">${label}</td></tr>`;
@@ -56,29 +57,29 @@ function render(data, previous = {}) {
   $("#sync-label").textContent = `最新数据 ${meta.latestDataDate || "待同步"}`;
   $("#basis-label").textContent = meta.basisLabel;
   $("#owner-sales").textContent = currency(summary.sales);
-  $("#owner-profit").textContent = currency(summary.profit);
+  $("#owner-profit").textContent = moneyOrPending(summary.profit, summary.profitPending);
   $("#owner-refund").textContent = currency(summary.refundAmount);
   $("#owner-loss").textContent = currency(summary.misShipmentLoss);
   $("#month-profit").textContent = currency(summary.monthProfit);
-  $("#owner-commission-body").innerHTML = commissions.length ? commissions.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.store)}</td><td>${percent(item.rate)}</td><td class="money">${currency(item.commission)}</td></tr>`).join("") : emptyRow(5, "人员表中暂无符合条件的员工");
+  $("#owner-commission-body").innerHTML = commissions.length ? commissions.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.store)}</td><td>${percent(item.rate)}</td><td class="money">${moneyOrPending(item.commission, item.pending)}</td></tr>`).join("") : emptyRow(5, "人员表中暂无符合条件的员工");
   $("#reminder-list").innerHTML = reminders.map((item) => `<div class="reminder">${escapeHtml(item)}</div>`).join("");
 
   const mine = commissions[0];
   $("#stream-orders").textContent = integer(summary.orderCount, " 单");
   $("#stream-sales").textContent = currency(summary.sales);
-  $("#stream-commission").textContent = currency(mine?.commission || summary.teamCommission);
+  $("#stream-commission").textContent = moneyOrPending(mine?.commission ?? summary.teamCommission, mine?.pending || summary.profitPending);
   $("#stream-rate").textContent = mine ? `${mine.name} · ${percent(mine.rate)}` : "请选择店铺或配置人员";
   $("#stream-shipped").textContent = integer(summary.shippedCount, " 件");
   const productRows = products.length ? products.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td class="money">${currency(item.profit)}</td></tr>`).join("") : emptyRow(4);
   $("#stream-product-body").innerHTML = productRows;
-  $("#stream-income").innerHTML = mine ? `<span>${escapeHtml(mine.name)} · ${escapeHtml(mine.store)}</span><strong>${currency(mine.commission)}</strong><small>ERP 利润 ${currency(mine.profit)} × ${percent(mine.rate)} − 扣款 ${currency(mine.deduction)}</small>` : `<span>团队预计提成</span><strong>${currency(summary.teamCommission)}</strong><small>选择具体店铺后可查看个人数据</small>`;
+  $("#stream-income").innerHTML = mine ? (mine.pending ? `<span>${escapeHtml(mine.name)} · ${escapeHtml(mine.store)}</span><strong>待生成</strong><small>今日订单已同步，等待 ERP 毛利报表生成后再计算提成。</small>` : `<span>${escapeHtml(mine.name)} · ${escapeHtml(mine.store)}</span><strong>${currency(mine.commission)}</strong><small>ERP 利润 ${currency(mine.profit)} × ${percent(mine.rate)} − 扣款 ${currency(mine.deduction)}</small>`) : `<span>团队预计提成</span><strong>${moneyOrPending(summary.teamCommission, summary.profitPending)}</strong><small>选择具体店铺后可查看个人数据</small>`;
   renderDetails($("#stream-deductions"), deductions, "当前没有扣款记录");
 
   $("#control-orders").textContent = integer(summary.orderCount, " 单");
   $("#control-shipped").textContent = integer(summary.shippedCount, " 件");
   $("#control-refunds").textContent = integer(summary.refundCount, " 单");
-  $("#control-commission").textContent = currency(summary.teamCommission);
-  $("#team-cards").innerHTML = team.length ? team.map((item) => `<div class="team-card"><span>${escapeHtml(item.role)} · ${item.members} 人</span><strong>${currency(item.commission)}</strong></div>`).join("") : `<div class="team-card"><span>暂无角色配置</span><strong>—</strong></div>`;
+  $("#control-commission").textContent = moneyOrPending(summary.teamCommission, summary.profitPending);
+  $("#team-cards").innerHTML = team.length ? team.map((item) => `<div class="team-card"><span>${escapeHtml(item.role)} · ${item.members} 人</span><strong>${moneyOrPending(item.commission, item.pending)}</strong></div>`).join("") : `<div class="team-card"><span>暂无角色配置</span><strong>—</strong></div>`;
   renderDetails($("#control-deductions"), deductions, "当前没有待处理扣款或异常");
 
   $("#collab-product-body").innerHTML = products.length ? products.map((item, index) => `<tr><td>${index + 1}</td><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td>${item.stock == null ? "ERP未关联" : integer(item.stock, " 件")}</td><td class="money">${currency(item.profit)}</td><td><span class="pill">已同步</span></td></tr>`).join("") : emptyRow(7);

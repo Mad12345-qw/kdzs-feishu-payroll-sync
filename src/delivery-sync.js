@@ -288,7 +288,7 @@ export class DeliverySyncService {
   }
 
   async logDay(day, fields) {
-    const succeeded = fields["状态"] === "成功";
+    const succeeded = fields["状态"] !== "失败";
     return this.upsert(this.tables.logs, [{
       "任务键": `day|${day}`, "日期": day, "完成时间": Date.now(),
       ...(succeeded ? { "失败原因": "" } : {}), ...fields,
@@ -326,8 +326,10 @@ export class DeliverySyncService {
           throw new Error(`${day} ${dataType}写入不完整：成功${write.created + write.updated}/总计${write.total}，失败${write.failed}；${reason}`);
         }
       }
-      await this.logDay(day, { "状态": "成功", "订单数": result.orders.total, "售后数": result.refunds.total, "店铺利润数": result.storeProfit.total, "商品利润数": result.productProfit.total });
-      this.logger.info(JSON.stringify({ day, status: "success", ...Object.fromEntries(Object.entries(result).map(([key, value]) => [key, value.total])) }));
+      const profitPending = result.orders.total > 0 && result.storeProfit.total === 0;
+      const status = profitPending ? "成功（利润待生成）" : "成功";
+      await this.logDay(day, { "状态": status, "订单数": result.orders.total, "售后数": result.refunds.total, "店铺利润数": result.storeProfit.total, "商品利润数": result.productProfit.total });
+      this.logger.info(JSON.stringify({ day, status: profitPending ? "profit_pending" : "success", ...Object.fromEntries(Object.entries(result).map(([key, value]) => [key, value.total])) }));
       return result;
     } catch (error) {
       await this.logDay(day, { "状态": "失败", "失败原因": error.message });

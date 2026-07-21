@@ -53,16 +53,30 @@ test("三种提成口径分别使用当日、昨日和整月 ERP 利润", async 
 
 test("看板实时提成口径分别请求 ERP 的下单和发货时间类型", async () => {
   const calls = [];
-  const kdzs = { listAll: async (_method, params) => {
-    calls.push(params);
+  const kdzs = { listAll: async (method, params) => {
+    calls.push({ method, params });
+    if (method === "kdzs.erp.api.trade.list") return [];
     return [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: params.queryTimeType === 1 ? 500 : 300 }];
   } };
   const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
   const placed = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "placed" });
   const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
   const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
-  assert.deepEqual(calls.map((item) => item.queryTimeType), [1, 3, 3]);
+  assert.deepEqual(calls.filter((item) => item.method === "kdzs.erp.api.report.gross.profit").map((item) => item.params.queryTimeType), [1, 3, 3]);
   assert.equal(placed.commissions[0].grossCommission, 15);
   assert.equal(shipped.commissions[0].grossCommission, 6);
   assert.equal(monthly.commissions[0].grossCommission, 3);
+});
+
+test("当天订单已同步但 ERP 毛利未生成时，不把利润和提成显示为零", async () => {
+  const kdzs = { listAll: async (method) => method === "kdzs.erp.api.trade.list"
+    ? [{ sellerNick: "测试店", platform: "抖音", payment: 120, receivedPayment: 120 }]
+    : [] };
+  const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
+  const dashboard = await service.getDashboard({ date: "2026-07-21", store: "测试店", basis: "placed" });
+  assert.equal(dashboard.summary.orderCount, 1);
+  assert.equal(dashboard.summary.sales, 120);
+  assert.equal(dashboard.summary.profitPending, true);
+  assert.equal(dashboard.summary.profit, null);
+  assert.equal(dashboard.commissions[0].commission, null);
 });

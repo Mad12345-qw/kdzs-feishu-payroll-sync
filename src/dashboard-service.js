@@ -151,6 +151,21 @@ export class DashboardService {
       && (platform === "全部平台" || row["平台类型"] === platform));
   }
 
+  async queryDayOrders({ date, store, platform }) {
+    const client = this.kdzs || (this.getKdzs ? await this.getKdzs() : null);
+    if (!client) return null;
+    const day = new Date(`${date}T00:00:00+08:00`);
+    const trades = await client.listAll("kdzs.erp.api.trade.list", {
+      timeType: "CREATE_TIME", startTime: startOfDayString(day), endTime: endOfDayString(day),
+    }, 200);
+    const rows = trades.filter((trade) => (store === "全部店铺" || text(trade.sellerNick) === store)
+      && (platform === "全部平台" || text(trade.platform) === platform));
+    return {
+      orderCount: rows.length,
+      sales: money(rows.reduce((total, trade) => total + number(trade.receivedPayment || trade.payment), 0)),
+    };
+  }
+
   async getDashboard({ date, store = "全部店铺", platform = "全部平台", basis = "placed", role = "全部角色" } = {}) {
     const safeBasis = ["placed", "shipped", "monthly"].includes(basis) ? basis : "placed";
     const key = JSON.stringify({ date, store, platform, basis: safeBasis, role });
@@ -163,7 +178,8 @@ export class DashboardService {
     ]);
     const overview = overviewRecords.map((record) => record.fields || {}).map((fields) => ({ ...fields, __date: recordDate(fields) }));
     const dates = [...new Set(overview.map((row) => row.__date).filter(Boolean))].sort().reverse();
-    const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date : (dates.includes(chinaDate()) ? chinaDate() : dates[0] || chinaDate());
+    // 工作台默认展示今天。即使 ERP 毛利报表尚未生成，也不能静默退回昨天。
+    const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date : chinaDate();
     const yesterday = dateOnly(new Date(`${selectedDate}T00:00:00+08:00`).getTime() - 86400000);
     const month = selectedDate.slice(0, 7);
     const stores = [...new Set(overview.map((row) => scalar(row["店铺名称"])).filter(Boolean))].sort();
@@ -175,15 +191,24 @@ export class DashboardService {
     const monthRows = overview.filter((row) => row.__date.startsWith(month) && matchesDimension(row));
     let basisRows = safeBasis === "monthly" ? monthRows : safeBasis === "shipped" ? yesterdayRows : dayRows;
     let commissionSource = "飞书已同步的 ERP 数据";
+    let liveProfitRows = null;
+    let liveOrderSummary = null;
     try {
       const liveRows = await this.queryCommissionBase({ date: selectedDate, yesterday, month, basis: safeBasis, store, platform });
       if (liveRows) {
         basisRows = liveRows;
+        liveProfitRows = liveRows;
         commissionSource = "快递助手 ERP 实时毛利报表";
       }
     } catch (error) {
       this.logger.warn(`提成口径实时查询失败，已回退到已同步 ERP 数据：${error.message}`);
     }
+    try {
+      liveOrderSummary = await this.queryDayOrders({ date: selectedDate, store, platform });
+    } catch (error) {
+      this.logger.warn(`今日订单实时查询失败，已回退到已同步 ERP 数据：${error.message}`);
+    }
+    const profitPending = Boolean(liveOrderSummary?.orderCount > 0 && liveProfitRows && liveProfitRows.length === 0);
 
     const people = peopleRecords.map((record) => record.fields || {}).filter((person) => scalar(person["启用提成展示"]) !== "否")
       .filter((person) => store === "全部店铺" || scalar(person["所属店铺"]) === store)
@@ -204,13 +229,14 @@ export class DashboardService {
       }).reduce((total, item) => total + number(item["金额"]), 0);
       return {
         name: scalar(person["姓名"]), role: scalar(person["角色"] || "主播"), store: personStore,
-        rate, profit, grossCommission: money(Math.max(0, profit) * rate), deduction: money(deduction),
-        commission: money(Math.max(0, profit) * rate - deduction),
+        rate, profit: profitPending ? null : profit, pending: profitPending,
+        grossCommission: profitPending ? null : money(Math.max(0, profit) * rate), deduction: money(deduction),
+        commission: profitPending ? null : money(Math.max(0, profit) * rate - deduction),
       };
     });
     const team = ROLE_ORDER.map((teamRole) => {
       const members = commissions.filter((item) => item.role === teamRole);
-      return { role: teamRole, members: members.length, commission: money(members.reduce((total, item) => total + item.commission, 0)) };
+      return { role: teamRole, members: members.length, pending: members.some((item) => item.pending), commission: members.some((item) => item.pending) ? null : money(members.reduce((total, item) => total + item.commission, 0)) };
     }).filter((item) => item.members);
 
     const productsRaw = await this.productRows(selectedDate);
@@ -239,15 +265,17 @@ export class DashboardService {
     }));
 
     const summary = {
-      sales: sum(dayRows, "销售金额") || sum(dayRows, "实际收入") || sum(dayRows, "净销售额"),
-      profit: sum(dayRows, "利润"), orderCount: Math.round(sum(dayRows, "订单数")), shippedCount: Math.round(sum(yesterdayRows, "实发数量")),
+      sales: liveOrderSummary?.sales || sum(dayRows, "销售金额") || sum(dayRows, "实际收入") || sum(dayRows, "净销售额"),
+      profit: profitPending ? null : sum(dayRows, "利润"), profitPending,
+      orderCount: liveOrderSummary?.orderCount ?? Math.round(sum(dayRows, "订单数")), shippedCount: Math.round(sum(yesterdayRows, "实发数量")),
       refundAmount: sum(dayRows, "退款金额"), refundCount: Math.round(sum(dayRows, "退款数量")),
       misShipmentLoss: money(selectedDeductions.filter((item) => item.type.includes("错发")).reduce((total, item) => total + item.amount, 0)),
       monthProfit: sum(monthRows, "利润"), yesterdayProfit: sum(yesterdayRows, "利润"),
-      teamCommission: money(commissions.reduce((total, item) => total + item.commission, 0)),
+      teamCommission: profitPending ? null : money(commissions.reduce((total, item) => total + item.commission, 0)),
     };
     const reminders = [];
-    if (!dayRows.length) reminders.push(`${selectedDate} 暂无 ERP 利润记录，请先确认当天同步是否完成。`);
+    if (profitPending) reminders.push(`${selectedDate} 已同步 ${liveOrderSummary.orderCount} 笔订单；ERP 毛利报表尚未生成，利润与提成将在 ERP 返回后自动展示。`);
+    else if (!dayRows.length) reminders.push(`${selectedDate} 暂无 ERP 利润记录，请先确认当天同步是否完成。`);
     if (summary.misShipmentLoss > 0) reminders.push(`今天已登记错发损耗 ¥${summary.misShipmentLoss.toFixed(2)}，可优先核对发货环节。`);
     if (summary.refundAmount > 0) reminders.push(`ERP 今日退款金额 ¥${summary.refundAmount.toFixed(2)}，月结口径会按 ERP 最终结果体现。`);
     if (!reminders.length) reminders.push("今日暂未发现人工登记的错发损耗；经营金额均直接来自 ERP。 ");
@@ -259,7 +287,7 @@ export class DashboardService {
         basisLabel: safeBasis === "placed" ? "下单成交（ERP 实时）" : safeBasis === "shipped" ? "昨日已发货（ERP 实时）" : "月度扣售后（ERP 实时）",
         note: `销售、利润、库存、售后均展示 ERP 返回值；${commissionSource}用于本次提成基数，系统只做比例乘法和人工扣款汇总。`,
       },
-      filters: { dates: dates.slice(0, 120), stores, platforms, roles: ROLE_ORDER },
+      filters: { dates: [...new Set([selectedDate, ...dates])].slice(0, 120), stores, platforms, roles: ROLE_ORDER },
       summary, commissions, team, deductions: selectedDeductions.slice(0, 30), products, reminders,
     };
     this.cache.set(key, { time: Date.now(), value });
