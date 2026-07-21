@@ -173,6 +173,13 @@ td.money { color: #ffad63; font-weight: 700; }
 .quick-actions a > svg { margin-left: auto; width: 18px; color: var(--muted); }
 .quick-actions strong, .quick-actions small { display: block; }
 .quick-actions small { margin-top: 5px; color: var(--muted); font-size: 10px; }
+.role-ai-tools { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.role-ai-tools article { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: rgba(25,30,41,.9); box-shadow: var(--shadow); }
+.role-ai-tools small { color: var(--muted); font-size: 10px; }
+.role-ai-tools h3 { margin: 4px 0 7px; font-size: 15px; }
+.role-ai-tools p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.copy-prompt { grid-column: 1 / -1; min-height: 36px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; color: #e7edf8; background: rgba(255,255,255,.05); cursor: pointer; font-size: 11px; font-weight: 700; }
+.copy-prompt:hover { background: rgba(255,255,255,.1); }
 .mobile-nav { display: none; }
 
 @media (max-width: 1100px) {
@@ -206,6 +213,7 @@ td.money { color: #ffad63; font-weight: 700; }
   .collab-banner { align-items: flex-start; flex-direction: column; padding: 23px; }
   .collab-banner .action-button { width: 100%; }
   .quick-actions { grid-template-columns: 1fr; }
+  .role-ai-tools { grid-template-columns: 1fr; }
   .mobile-nav { position: fixed; z-index: 30; display: grid; grid-template-columns: repeat(4, 1fr); left: 12px; right: 12px; bottom: calc(10px + env(safe-area-inset-bottom)); min-height: 66px; padding: 7px; border: 1px solid rgba(255,255,255,.09); border-radius: 19px; background: rgba(18,22,30,.9); backdrop-filter: blur(24px); box-shadow: 0 18px 50px rgba(0,0,0,.45); }
   .mobile-nav button { border-radius: 13px; display: grid; place-items: center; align-content: center; gap: 4px; font-size: 10px; }
   .mobile-nav button svg { width: 18px; }
