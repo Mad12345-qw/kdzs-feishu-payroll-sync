@@ -7,7 +7,7 @@ import { FeishuClient } from "./feishu-client.js";
 import { createDeliveryKdzsClient } from "./session-provider.js";
 import { DeliverySyncService } from "./delivery-sync.js";
 import { DashboardService } from "./dashboard-service.js";
-import { addDays, dateOnly, previousMonth } from "./utils.js";
+import { addDays, dateOnly } from "./utils.js";
 
 const config = getConfig({ requireKdzs: false });
 const feishu = new FeishuClient(config.feishu);
@@ -77,16 +77,10 @@ async function runDailySync() {
   try {
     const kdzs = await createDeliveryKdzsClient({ feishu: sourceFeishu, config });
     const service = new DeliverySyncService({ feishu, kdzs });
-    const previous = previousMonth(new Date());
-    const monthParts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit" }).formatToParts(new Date());
-    const part = (type) => monthParts.find((item) => item.type === type)?.value;
-    const currentMonth = `${part("year")}-${part("month")}`;
-    await service.preparePayroll(currentMonth);
+    // 新版只负责 ERP 原始数据同步与实时提成展示。历史工资表保留，但不再由服务自动生成或月结。
     await service.syncReferenceData();
-    const today = Number(part("day"));
-    const settlement = today === config.sync.payrollSettlementDay ? await service.settlePayroll(previous) : { blocked: false };
     state.lastDailySyncAt = new Date().toISOString();
-    state.lastDailySyncError = settlement.blocked ? "月度利润对账未通过，工资结算已阻断" : null;
+    state.lastDailySyncError = null;
     // A startup catch-up can finish during the 02:00 scheduler window.
     // Mark a successful run for the China calendar day so it is not launched again.
     lastDailyDate = dateOnly();
