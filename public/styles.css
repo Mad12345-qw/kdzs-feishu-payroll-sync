@@ -209,6 +209,7 @@ td.money { color: #ffad63; font-weight: 700; }
 }
 @media (max-width: 560px) {
   h1 { font-size: 27px; }
+  .quick-filters .filter-chip { flex: 1 1 calc(50% - 4px); min-width: 0; justify-content: center; overflow: hidden; white-space: nowrap; }
   .hero-metrics { margin-top: 33px; }
   .hero-metrics > div { padding: 0 13px; }
   .hero-metrics strong { font-size: 23px; }

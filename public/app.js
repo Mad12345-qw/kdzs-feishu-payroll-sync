@@ -78,6 +78,7 @@ function render(data) {
     const view = element.dataset.view;
     element.classList.toggle("hidden", !isOwner && view !== employeeView && view !== "collab");
   });
+  $(".mobile-nav").style.gridTemplateColumns = isOwner ? "repeat(4, 1fr)" : "repeat(2, 1fr)";
   $("#collab-data-panel").classList.toggle("hidden", !isOwner);
   $("#feishu-link").classList.toggle("hidden", !isOwner || !data.links?.feishu);
   $("#collab-feishu").classList.toggle("hidden", !isOwner || !data.links?.feishu);
