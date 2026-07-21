@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>快麦 ERP × 飞书利润薪资自动化｜交付验收报告</title>
+  <style>
+    :root { --ink:#14213d; --muted:#65738a; --line:#e7ecf3; --paper:#fff; --bg:#f5f7fb; --blue:#3267e3; --green:#198754; --amber:#b7791f; --navy:#172a53; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:var(--bg); font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; }
+    .wrap { max-width:1100px; margin:0 auto; padding:36px 24px 56px; }
+    .hero { position:relative; overflow:hidden; padding:42px; border-radius:20px; color:#fff; background:linear-gradient(125deg,#10234b,#245bc4 68%,#4990eb); box-shadow:0 16px 42px #183e8850; }
+    .hero:after { content:""; position:absolute; width:360px; height:360px; border:56px solid #ffffff15; border-radius:50%; right:-108px; top:-155px; }
+    .hero > * { position:relative; z-index:1; }
+    h1 { margin:0 0 8px; font-size:32px; letter-spacing:.3px; }
+    .subtitle { margin:0; color:#dfeaff; font-size:17px; }
+    .badges { display:flex; flex-wrap:wrap; gap:9px; margin-top:24px; }
+    .badge { padding:5px 11px; border:1px solid #ffffff52; border-radius:999px; background:#ffffff16; font-size:13px; }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:20px 0; }
+    .card,.section { background:var(--paper); border:1px solid var(--line); border-radius:14px; box-shadow:0 4px 16px #1a365d0a; }
+    .metric { padding:18px; }
+    .metric b { display:block; font-size:26px; color:var(--blue); line-height:1.2; }
+    .metric span { color:var(--muted); font-size:13px; }
+    .section { margin-top:18px; padding:28px; }
+    h2 { margin:0 0 18px; font-size:21px; }
+    h3 { margin:20px 0 8px; font-size:16px; }
+    h3:first-of-type { margin-top:0; }
+    .lead { margin:0 0 16px; color:#35445c; }
+    .done { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:0; margin:0; list-style:none; }
+    .done li { padding:13px 14px 13px 42px; position:relative; border:1px solid var(--line); border-radius:10px; background:#fbfcff; }
+    .done li:before { content:"✓"; position:absolute; left:14px; top:13px; width:19px; height:19px; border-radius:50%; color:#fff; background:var(--green); text-align:center; font-size:12px; line-height:19px; }
+    table { width:100%; border-collapse:collapse; font-size:14px; }
+    th { color:#4c5e7b; font-weight:600; background:#f6f8fc; }
+    th,td { padding:10px 12px; border-bottom:1px solid var(--line); text-align:left; }
+    td.num { font-variant-numeric:tabular-nums; text-align:right; font-weight:600; color:#243a66; }
+    .formula { padding:17px 19px; border-left:4px solid var(--blue); border-radius:0 9px 9px 0; color:#203965; background:#f1f6ff; font-family:"SFMono-Regular",Consolas,"Microsoft YaHei",monospace; }
+    .flow { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-top:8px; }
+    .step { padding:14px; min-height:126px; border-radius:12px; background:#f7f9fd; border:1px solid var(--line); }
+    .step i { display:block; margin-bottom:8px; color:var(--blue); font-style:normal; font-weight:700; }
+    .step b { display:block; margin-bottom:4px; }
+    .step span { color:var(--muted); font-size:13px; }
+    .status { display:inline-block; padding:3px 9px; border-radius:999px; color:#12683e; background:#e8f7ef; font-weight:600; font-size:13px; }
+    .warning { margin-top:14px; padding:13px 15px; border-radius:9px; color:#805400; background:#fff8e7; }
+    .links a { color:var(--blue); text-decoration:none; font-weight:600; }
+    .footer { padding:18px 4px 0; color:#78869a; text-align:center; font-size:13px; }
+    @media (max-width:760px) { .wrap { padding:18px 14px 36px; } .hero,.section { padding:24px; } h1 { font-size:25px; } .grid { grid-template-columns:repeat(2,1fr); } .done,.flow { grid-template-columns:1fr; } .section { overflow-x:auto; } }
+    @media print { body { background:#fff; } .wrap { max-width:none; padding:0; } .hero { box-shadow:none; } .section,.card { box-shadow:none; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <h1>快麦 ERP × 飞书利润薪资自动化</h1>
+      <p class="subtitle">项目交付与验收报告 · 店铺利润、主播绩效、工资结算全流程</p>
+      <div class="badges">
+        <span class="badge">验收日期：2026-07-19</span>
+        <span class="badge">运行状态：线上正常</span>
+        <span class="badge">利润对账：已通过</span>
+        <span class="badge">工资结算：已验证</span>
+      </div>
+    </header>
+
+    <section class="grid" aria-label="项目交付概览">
+      <div class="card metric"><b>42</b><span>飞书业务及支持数据表</span></div>
+      <div class="card metric"><b>70,945</b><span>客户库当前订单记录</span></div>
+      <div class="card metric"><b>35,393</b><span>物流记录</span></div>
+      <div class="card metric"><b>18</b><span>可追溯工资记录</span></div>
+    </section>
+
+    <section class="section">
+      <h2>1. 项目完成了什么</h2>
+      <p class="lead">本项目已经将快麦 ERP 的业务原始数据接入飞书多维表格，并在飞书内建立了可追溯的利润与工资结算链路。ERP Session 技术配置仅用于接口授权，不参与利润或工资数据计算。</p>
+      <ul class="done">
+        <li>完成快麦 ERP Session 获取、自动刷新、接口签名及超时重试。</li>
+        <li>完成飞书多维表格读写接入，业务数据统一写入客户交付库。</li>
+        <li>完成订单、售后退款、物流、店铺利润、商品利润自动同步。</li>
+        <li>完成库存快照、平台商品、ERP 货品与 SKU 数据同步。</li>
+        <li>完成订单、售后、物流、商品利润按月/半月自动分表。</li>
+        <li>完成店铺利润、主播工资、结算快照与月度利润对账。</li>
+        <li>完成 GitHub 源码管理、Render 自动部署、健康检查和小时同步。</li>
+        <li>完成同步失败、利润差异、无来源旧工资的安全隔离与结算拦截。</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>2. 已同步和留存的数据量</h2>
+      <p class="lead">以下为验收时客户飞书交付库中的实时记录数。订单、售后、物流和商品利润已按时间分表，避免单表达到飞书 20,000 条记录上限。</p>
+      <table>
+        <thead><tr><th>数据类型</th><th>当前记录数</th><th>已实现内容</th></tr></thead>
+        <tbody>
+          <tr><td>订单数据</td><td class="num">70,945 条</td><td>订单、店铺、支付、商品、SKU、状态等数据</td></tr>
+          <tr><td>售后/退款数据</td><td class="num">22,001 条</td><td>退款单、退款金额、售后状态及商品明细</td></tr>
+          <tr><td>物流数据</td><td class="num">35,393 条</td><td>订单、运单、快递公司、发货及物流状态</td></tr>
+          <tr><td>商品利润数据</td><td class="num">39,033 条</td><td>商品/SKU 维度销售、成本、退款与利润明细</td></tr>
+          <tr><td>店铺利润明细</td><td class="num">187 条</td><td>ERP 最终店铺日利润，作为提成基数</td></tr>
+          <tr><td>库存快照</td><td class="num">2,900 条</td><td>库存、可用库存、占用库存等信息</td></tr>
+          <tr><td>平台商品 / ERP 货品</td><td class="num">15,819 条</td><td>平台商品、ERP 商品、SKU、成本及价格资料</td></tr>
+          <tr><td>同步日志 / 利润对账</td><td class="num">94 条</td><td>同步过程记录、按月按店铺的利润核验结果</td></tr>
+          <tr><td>人员 / 工资</td><td class="num">6 人 / 18 条</td><td>5、6、7 月工资记录，均有稳定唯一键</td></tr>
+        </tbody>
+      </table>
+      <div class="warning">验收范围：2026 年 5 月、6 月完整数据，以及 2026 年 7 月截至 19 日的数据。数据计数为验收时客户库的实时数量。</div>
+    </section>
+
+    <section class="section">
+      <h2>3. 利润与工资功能</h2>
+      <h3>利润基数</h3>
+      <p>店铺提成统一采用快麦 ERP 返回的最终净利润 <b>netSalesProfit</b>。退款、退货、商品成本、运费等影响已由 ERP 最终利润统一反映，工资计算不会重复扣减。</p>
+      <h3>工资公式</h3>
+      <div class="formula">应发工资 = 基本工资 + 绩效工资 + 奖金 + MAX(0，店铺净利润) × 提成百分比 − 扣款</div>
+      <ul>
+        <li>店铺亏损时提成固定为 ¥0，不产生负提成。</li>
+        <li>金额统一保留两位小数。</li>
+        <li>人员表中的所属店铺、基本工资、提成百分比会自动带入待结算工资。</li>
+        <li>人员配置修改后，待结算工资自动刷新；已结算工资只保留历史快照，不会静默改变。</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>4. 系统如何自动运行</h2>
+      <div class="flow">
+        <div class="step"><i>01</i><b>ERP 数据读取</b><span>使用 Session 自动授权，接口请求具备超时与重试保护。</span></div>
+        <div class="step"><i>02</i><b>飞书增量同步</b><span>按稳定唯一键新增或更新，不重复写入。</span></div>
+        <div class="step"><i>03</i><b>利润自动对账</b><span>逐月、逐店核验 ERP 利润与飞书利润，差额上限为 ¥0.01。</span></div>
+        <div class="step"><i>04</i><b>工资自动结算</b><span>每月 15 日对账通过后结算上月工资，并锁定结算快照。</span></div>
+      </div>
+      <h3>定时任务</h3>
+      <ul>
+        <li><b>每小时：</b>回看并同步最近 3 天订单、售后、物流和利润，覆盖延迟退款、退货及订单状态变化。</li>
+        <li><b>每日：</b>更新库存、平台商品、ERP 货品快照，并生成当月工资草稿。</li>
+        <li><b>每月 15 日：</b>自动对账上月利润；通过后结算工资，不通过则自动阻断。</li>
+        <li><b>服务重启后：</b>自动补跑近期数据，降低漏同步风险。</li>
+      </ul>
+    </section>
+
+    <section class="section">
+      <h2>5. 交付验收结果</h2>
+      <table>
+        <thead><tr><th>验收项目</th><th>验收结果</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>ERP 与飞书连接</td><td><span class="status">通过</span></td><td>线上健康检查正常，ERP 与飞书均已连接</td></tr>
+          <tr><td>5 月利润对账</td><td><span class="status">通过</span></td><td>完整月份，逐店差额均为 ¥0</td></tr>
+          <tr><td>6 月利润对账</td><td><span class="status">通过</span></td><td>完整月份，逐店差额均为 ¥0</td></tr>
+          <tr><td>7 月利润对账</td><td><span class="status">通过</span></td><td>截至 7 月 19 日，逐店差额均为 ¥0；不可提前结算</td></tr>
+          <tr><td>工资记录唯一性</td><td><span class="status">通过</span></td><td>18 条工资记录均有唯一键，无重复发薪记录</td></tr>
+          <tr><td>6 月工资结算</td><td><span class="status">通过</span></td><td>6 人均已结算，实发工资与应发工资一致</td></tr>
+          <tr><td>无来源历史工资</td><td><span class="status">已隔离</span></td><td>12 条无唯一键旧工资已隔离，不参与当前工资计算</td></tr>
+          <tr><td>自动同步运行</td><td><span class="status">通过</span></td><td>Render 服务正常运行，定时任务启用</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>6. 日常使用说明</h2>
+      <h3>日常查看数据</h3>
+      <table>
+        <thead><tr><th>要看什么</th><th>打开哪张表</th><th>怎么看</th></tr></thead>
+        <tbody>
+          <tr><td>店铺当天 / 当月利润</td><td>02_店铺利润明细</td><td>按日期、店铺筛选；利润以 ERP 最终净利润为准。</td></tr>
+          <tr><td>订单、退款和退货明细</td><td>06_订单列表、07_售后列表</td><td>按订单号或店铺搜索；相关数据按月份、半月分表保存。</td></tr>
+          <tr><td>发货与物流状态</td><td>08_物流列表</td><td>按订单号或运单号搜索，查看快递、发货时间和物流状态。</td></tr>
+          <tr><td>商品 / SKU 利润</td><td>03_商品利润明细</td><td>按商品名称、SKU、店铺或日期筛选分析。</td></tr>
+          <tr><td>系统是否正常同步</td><td>16_同步日志、Render 健康检查</td><td>查看最近任务是否成功、失败原因及线上服务状态。</td></tr>
+        </tbody>
+      </table>
+
+      <h3>员工与薪资配置（客户需要维护）</h3>
+      <ol>
+        <li>打开 <b>13_人员表</b>，每名员工维护：<b>姓名、所属店铺、基本工资、提成百分比</b>。</li>
+        <li>员工归属哪个店铺，就在“所属店铺”填写对应店铺名称；系统按该店铺的 ERP 最终利润计算提成。</li>
+        <li>调整底薪或提成比例后，<b>未结算</b>月份的工资会自动重新计算；已结算月份保持原快照不变。</li>
+        <li>员工当月的<b>绩效工资、奖金、扣款</b>在 <b>14_工资表</b> 对应员工、对应月份录入，系统自动重算应发工资。</li>
+      </ol>
+
+      <h3>每月工资结算操作</h3>
+      <ol>
+        <li>每月 15 日后，先打开 <b>17_月度利润对账</b>，筛选上一个月。</li>
+        <li>确认该月每个店铺的状态均为“通过”，且 ERP 利润与飞书利润差额为 ¥0.00。</li>
+        <li>打开 <b>14_工资表</b>，核对员工的店铺、基本工资、提成百分比、绩效、奖金、扣款及应发工资。</li>
+        <li>系统自动结算上月工资，并写入<b>实发工资、店铺利润快照、提成金额快照、结算时间</b>。</li>
+        <li>结算后不要直接修改已结算记录；如需调整，须按人工确认后的工资调整流程处理，保留原始快照。</li>
+      </ol>
+
+      <h3>异常处理规则</h3>
+      <ul>
+        <li>同步日志出现失败、ERP 与飞书利润存在差额，或关键数据未写入完成时，系统会自动阻止工资结算。</li>
+        <li>店铺亏损时提成自动为 ¥0；退款、退货不需要人工再次从工资中扣减，因为 ERP 最终利润已反映影响。</li>
+        <li>发现订单、售后或工资异常时，先按订单号/退款编号在明细表追溯，再查看同步日志中的失败原因。</li>
+      </ul>
+      <p class="links">常用入口：<a href="https://my.feishu.cn/base/BvszbBG1yaPKm6sXE7IcEK9dnoe?table=tblUmmf1ph2ri8TJ">工资表</a>　·　<a href="https://my.feishu.cn/base/BvszbBG1yaPKm6sXE7IcEK9dnoe?table=tblsqw6Omdlhyyg5">月度利润对账</a>　·　<a href="https://kdzs-feishu-payroll-sync.onrender.com/health">线上健康检查</a></p>
+    </section>
+
+    <section class="section">
+      <h2>7. 交付结论</h2>
+      <p><b>结论：</b>ERP 数据同步、店铺利润核算、退款退货影响处理、人员工资自动计算、月度利润对账、工资结算保护和线上自动运行均已完成，可正式用于日常经营数据同步及后续月度工资结算。</p>
+    </section>
+
+    <section class="section">
+      <h2>8. 原始需求逐项对应说明</h2>
+      <p class="lead">本表对应项目最初提出的接口、飞书结构、利润、工资、同步、自动化与交付要求。</p>
+      <table>
+        <thead><tr><th>原始需求</th><th>交付状态</th><th>实际实现方式</th></tr></thead>
+        <tbody>
+          <tr><td>订单、订单明细同步</td><td><span class="status">已交付</span></td><td>同步订单号、店铺、时间、支付、状态、商品、SKU、数量等，并按唯一键更新。</td></tr>
+          <tr><td>商品 / SKU / 成本同步</td><td><span class="status">已交付</span></td><td>同步平台商品、ERP 货品、SKU、价格、成本、分类等快照。</td></tr>
+          <tr><td>库存同步</td><td><span class="status">已交付</span></td><td>同步库存、可用库存、预占库存、在途库存等当前快照。</td></tr>
+          <tr><td>物流 / 发货同步</td><td><span class="status">已交付</span></td><td>同步订单号、运单号、快递公司、发货时间、物流状态等。</td></tr>
+          <tr><td>售后 / 退款同步</td><td><span class="status">已交付</span></td><td>同步退款编号、订单、退款金额、状态、原因、货物状态、退货物流与商品明细。</td></tr>
+          <tr><td>店铺、商品利润分析</td><td><span class="status">已交付</span></td><td>写入店铺日利润与商品利润明细；提成使用 ERP 最终净利润。</td></tr>
+          <tr><td>主播底薪与提成</td><td><span class="status">已交付</span></td><td>从人员表读取员工、店铺、基本工资、提成百分比；待结算工资自动更新。</td></tr>
+          <tr><td>奖金、绩效、扣款</td><td><span class="status">已交付</span></td><td>由客户在工资表按月录入，自动参与应发工资公式计算。</td></tr>
+          <tr><td>退款、退货影响工资</td><td><span class="status">已覆盖</span></td><td>以 ERP 最终 <b>netSalesProfit</b> 为利润基数，避免飞书重复扣减。</td></tr>
+          <tr><td>增量同步、防重复、错误日志</td><td><span class="status">已交付</span></td><td>稳定唯一键 Upsert、同步日志、失败原因记录、超时与重试保护。</td></tr>
+          <tr><td>每月 15 日自动结算</td><td><span class="status">已交付</span></td><td>先利润对账，再结算上月工资；差额超限或写入失败自动阻断。</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>9. 数据来源、字段映射与人工维护项</h2>
+      <table>
+        <thead><tr><th>业务主题</th><th>ERP 自动获取</th><th>飞书计算 / 客户维护</th></tr></thead>
+        <tbody>
+          <tr><td>订单</td><td>订单号、店铺、创建/修改时间、支付金额、状态、商品、SKU、数量、发货信息</td><td>飞书按稳定唯一键保存，并按月/半月拆表</td></tr>
+          <tr><td>售后</td><td>退款编号、订单、退款金额、退款状态、退款原因、商品明细、货物状态</td><td>利润不单独二次扣减，以 ERP 最终利润为准</td></tr>
+          <tr><td>物流</td><td>订单号、运单号、快递公司、发货时间、物流状态</td><td>用于物流追踪与经营分析</td></tr>
+          <tr><td>商品 / 库存</td><td>商品 ID、SKU、名称、成本、价格、库存、可用库存、预占库存</td><td>库存以实时快照方式同步</td></tr>
+          <tr><td>店铺利润</td><td>销售、退款、成本、运费及最终净利润 netSalesProfit</td><td>作为工资提成唯一利润基数；每月自动对账</td></tr>
+          <tr><td>人员与工资</td><td>无</td><td>人员表维护店铺、底薪、提成；工资表维护绩效、奖金、扣款</td></tr>
+        </tbody>
+      </table>
+      <div class="warning">平台服务费、投流费用、包装费、额外奖金、绩效工资和扣款如需单独呈现或影响工资，应由客户在飞书规则/工资表中维护；当前工资利润基数始终以 ERP 最终净利润为准。</div>
+    </section>
+
+    <section class="section">
+      <h2>10. 飞书表结构与职责</h2>
+      <table>
+        <thead><tr><th>表</th><th>用途</th><th>数据性质</th></tr></thead>
+        <tbody>
+          <tr><td>01_每日财务汇总 / 02_店铺利润明细</td><td>店铺日利润、月利润与经营汇总</td><td>ERP 自动同步 + 对账</td></tr>
+          <tr><td>03_商品利润明细</td><td>商品、SKU 维度利润分析</td><td>ERP 自动同步，按月/半月分表</td></tr>
+          <tr><td>04_售后统计_店铺 / 05_售后统计_货品</td><td>售后经营分析</td><td>由售后明细汇总使用</td></tr>
+          <tr><td>06_订单列表 / 07_售后列表 / 08_物流列表</td><td>订单、退款、物流原始明细追溯</td><td>ERP 自动同步，按月/半月分表</td></tr>
+          <tr><td>10_库存快照 / 11_平台商品 / 12_ERP货品</td><td>库存、平台商品、ERP 货品与 SKU 信息</td><td>ERP 自动同步</td></tr>
+          <tr><td>13_人员表</td><td>员工、所属店铺、基本工资、提成百分比</td><td>客户维护，是工资配置唯一来源</td></tr>
+          <tr><td>14_工资表</td><td>绩效、奖金、扣款、应发、实发、结算快照</td><td>系统生成 + 客户补充月度项</td></tr>
+          <tr><td>15_工资规则说明</td><td>工资口径与操作说明</td><td>规则说明</td></tr>
+          <tr><td>16_同步日志 / 17_月度利润对账</td><td>同步审计、错误定位、工资结算前核验</td><td>系统自动维护</td></tr>
+          <tr><td>99_隔离表</td><td>无来源历史利润/工资的保留审计</td><td>不参与计算</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>11. 技术交付物</h2>
+      <ul>
+        <li><b>可运行同步代码：</b>Node.js 项目，包含 ERP 客户端、飞书客户端、同步服务、工资结算服务与自动化服务。</li>
+        <li><b>配置模板：</b><code>.env.example</code>，包含飞书应用、ERP、时间窗口、结算日和运行参数说明。</li>
+        <li><b>使用文档：</b><code>README.md</code>，说明部署、配置、运行、同步和安全注意事项。</li>
+        <li><b>自动化工作流：</b>GitHub Actions 支持按日期回填、利润重建、物流补齐、基础资料同步、对账、工资草稿和结算。</li>
+        <li><b>线上服务：</b>Render 自动部署，提供健康检查、小时同步、每日资料刷新与每月结算。</li>
+      </ul>
+      <p class="links">交付代码：<a href="https://github.com/Mad12345-qw/kdzs-feishu-payroll-sync">GitHub 仓库</a>　·　线上状态：<a href="https://kdzs-feishu-payroll-sync.onrender.com/health">Render 健康检查</a></p>
+    </section>
+    <p class="footer">快麦 ERP × 飞书利润薪资自动化项目 · 交付验收报告</p>
+  </main>
+</body>
+</html>

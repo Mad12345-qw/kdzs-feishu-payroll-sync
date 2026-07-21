@@ -18,7 +18,12 @@ jobs:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-          FEISHU_BASE_TOKEN: ${{ secrets.FEISHU_BASE_TOKEN }}
+          DELIVERY_BASE_TOKEN: ${{ secrets.DELIVERY_BASE_TOKEN }}
+          ERP_SOURCE_BASE_TOKEN: ${{ secrets.ERP_SOURCE_BASE_TOKEN }}
+          FEISHU_SESSION_TABLE_ID: ${{ secrets.FEISHU_SESSION_TABLE_ID }}
+          KDZS_APP_KEY: ${{ secrets.KDZS_APP_KEY }}
+          KDZS_APP_SECRET: ${{ secrets.KDZS_APP_SECRET }}
+          KDZS_SESSION: ${{ secrets.KDZS_SESSION }}
           REPO_URL: https://github.com/Mad12345-qw/kdzs-feishu-payroll-sync
           SERVICE_NAME: kdzs-feishu-payroll-sync
         run: |
@@ -44,7 +49,12 @@ jobs:
               --arg repo "$REPO_URL" \
               --arg app_id "$FEISHU_APP_ID" \
               --arg app_secret "$FEISHU_APP_SECRET" \
-              --arg base_token "$FEISHU_BASE_TOKEN" \
+              --arg delivery_base_token "$DELIVERY_BASE_TOKEN" \
+              --arg source_base_token "$ERP_SOURCE_BASE_TOKEN" \
+              --arg session_table_id "$FEISHU_SESSION_TABLE_ID" \
+              --arg kdzs_app_key "$KDZS_APP_KEY" \
+              --arg kdzs_app_secret "$KDZS_APP_SECRET" \
+              --arg kdzs_session "$KDZS_SESSION" \
               '{
                 type: "web_service",
                 name: $name,
@@ -55,8 +65,12 @@ jobs:
                 envVars: [
                   {key:"FEISHU_APP_ID",value:$app_id},
                   {key:"FEISHU_APP_SECRET",value:$app_secret},
-                  {key:"FEISHU_BASE_TOKEN",value:$base_token},
-                  {key:"FEISHU_SESSION_TABLE_ID",value:"tblDvIDJSSxHqKj8"},
+                  {key:"DELIVERY_BASE_TOKEN",value:$delivery_base_token},
+                  {key:"ERP_SOURCE_BASE_TOKEN",value:$source_base_token},
+                  {key:"FEISHU_SESSION_TABLE_ID",value:$session_table_id},
+                  {key:"KDZS_APP_KEY",value:$kdzs_app_key},
+                  {key:"KDZS_APP_SECRET",value:$kdzs_app_secret},
+                  {key:"KDZS_SESSION",value:$kdzs_session},
                   {key:"SCHEDULER_ENABLED",value:"true"},
                   {key:"SYNC_ENABLED",value:"false"},
                   {key:"HEALTH_INTERVAL_MINUTES",value:"10"},
@@ -78,22 +92,9 @@ jobs:
             deploy_id=$(echo "$created" | jq -r '.deployId')
             service_url=$(echo "$created" | jq -r '.service.serviceDetails.url')
           else
-            env_payload=$(jq -n \
-              --arg app_id "$FEISHU_APP_ID" \
-              --arg app_secret "$FEISHU_APP_SECRET" \
-              --arg base_token "$FEISHU_BASE_TOKEN" \
-              '[
-                {key:"FEISHU_APP_ID",value:$app_id},
-                {key:"FEISHU_APP_SECRET",value:$app_secret},
-                {key:"FEISHU_BASE_TOKEN",value:$base_token},
-                {key:"FEISHU_SESSION_TABLE_ID",value:"tblDvIDJSSxHqKj8"},
-                {key:"SCHEDULER_ENABLED",value:"true"},
-                {key:"SYNC_ENABLED",value:"true"},
-                {key:"HEALTH_INTERVAL_MINUTES",value:"10"},
-                {key:"PROFIT_LOOKBACK_DAYS",value:"45"},
-                {key:"TZ",value:"Asia/Shanghai"}
-              ]')
-            api -X PUT -d "$env_payload" "https://api.render.com/v1/services/$service_id/env-vars" >/dev/null
+            # For an existing service, Render is the single source of truth for
+            # credentials and target Base IDs. Deploying code must never replace
+            # customer-owned environment variables with GitHub workflow values.
             deployed=$(api -X POST -d '{}' "https://api.render.com/v1/services/$service_id/deploys")
             deploy_id=$(echo "$deployed" | jq -r '.id // .deploy.id // .[0].deploy.id // .[0].id // empty')
             if [ -z "$deploy_id" ]; then

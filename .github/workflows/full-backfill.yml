@@ -1,0 +1,50 @@
+name: Full ERP backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "ERP 历史回填开始日期"
+        required: true
+        default: "2026-06-01"
+      end_date:
+        description: "ERP 历史回填结束日期，留空表示今天"
+        required: false
+        default: ""
+      mode:
+        description: "full=全量，profit=仅店铺利润，logistics=仅物流，reference=库存/商品快照，reconcile=利润对账，prepare-payroll=生成工资表，settle-payroll=结算工资"
+        required: true
+        default: "full"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm test
+      - name: Run full backfill
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          DELIVERY_BASE_TOKEN: BvszbBG1yaPKm6sXE7IcEK9dnoe
+          ERP_SOURCE_BASE_TOKEN: LJB0bAyHFaTJ09sooPactc2xn4e
+          FEISHU_SESSION_TABLE_ID: tblDvIDJSSxHqKj8
+          SYNC_START_DATE: ${{ inputs.start_date }}
+          SCHEDULER_ENABLED: "false"
+          SYNC_ENABLED: "false"
+        run: |
+          set -euo pipefail
+          case "${{ inputs.mode }}" in
+            full) node src/index.js delivery-backfill "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}" ;;
+            profit) node src/index.js delivery-backfill-profit "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}" ;;
+            logistics) node src/index.js delivery-backfill-logistics "--start=${{ inputs.start_date }}" "--end=${{ inputs.end_date }}" ;;
+            reference) node src/index.js delivery-reference ;;
+            reconcile) node src/index.js delivery-reconcile "--month=${{ inputs.start_date }}" ;;
+            prepare-payroll) node src/index.js delivery-prepare-payroll "--month=${{ inputs.start_date }}" ;;
+            settle-payroll) node src/index.js delivery-settle-payroll "--month=${{ inputs.start_date }}" ;;
+            *) echo "Unsupported mode"; exit 2 ;;
+          esac

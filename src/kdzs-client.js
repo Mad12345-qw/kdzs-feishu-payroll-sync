@@ -26,13 +26,28 @@ export class KdzsClient {
     this.onSessionRefresh = config.onSessionRefresh;
   }
 
+  async fetchWithTimeout(url, options) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs || 30000);
+    try {
+      return await this.fetch(url, { ...options, signal: controller.signal });
+    } catch (cause) {
+      const error = new Error("快麦接口请求超时或网络异常");
+      error.retryable = true;
+      error.cause = cause;
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async getSession() {
     if (this.session) return this.session;
     const body = new FormData();
     body.append("appKey", this.config.appKey);
     body.append("appSecret", this.config.appSecret);
     body.append("expires", "86400000");
-    const response = await this.fetch(this.config.tokenUrl, { method: "POST", body });
+    const response = await this.fetchWithTimeout(this.config.tokenUrl, { method: "POST", body });
     const json = await response.json();
     const token = json?.data?.accessToken;
     if (!response.ok || !token) throw new Error(`获取快麦 session 失败：${json?.message || response.status}`);
@@ -59,7 +74,7 @@ export class KdzsClient {
         ...businessParams,
       });
       params.sign = createSignature(params, this.config.appSecret);
-      const response = await this.fetch(this.config.gateway, {
+      const response = await this.fetchWithTimeout(this.config.gateway, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" },
         body: new URLSearchParams(params),

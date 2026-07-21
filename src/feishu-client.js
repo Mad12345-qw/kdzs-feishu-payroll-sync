@@ -8,14 +8,41 @@ export class FeishuClient {
     this.tokenExpiresAt = 0;
   }
 
+  async fetchJson(url, options) {
+    const controller = new AbortController();
+    let timeout;
+    try {
+      const deadline = new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          const error = new Error("飞书接口请求超时");
+          error.retryable = true;
+          reject(error);
+        }, this.config.requestTimeoutMs || 30000);
+      });
+      const request = this.fetch(url, { ...options, signal: controller.signal })
+        .then(async (response) => ({ response, json: await response.json() }));
+      return await Promise.race([request, deadline]);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async getToken() {
     if (this.token && Date.now() < this.tokenExpiresAt - 60000) return this.token;
-    const response = await this.fetch(`${this.config.baseUrl}/auth/v3/tenant_access_token/internal`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ app_id: this.config.appId, app_secret: this.config.appSecret }),
-    });
-    const json = await response.json();
+    let response; let json;
+    try {
+      ({ response, json } = await this.fetchJson(`${this.config.baseUrl}/auth/v3/tenant_access_token/internal`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ app_id: this.config.appId, app_secret: this.config.appSecret }),
+      }));
+    } catch (cause) {
+      const error = new Error("获取飞书凭证超时或网络异常");
+      error.retryable = true;
+      error.cause = cause;
+      throw error;
+    }
     if (!response.ok || json.code !== 0) throw new Error(`获取飞书凭证失败：${json.msg || response.status}`);
     this.token = json.tenant_access_token;
     this.tokenExpiresAt = Date.now() + Number(json.expire || 7200) * 1000;
@@ -25,21 +52,30 @@ export class FeishuClient {
   async request(method, endpoint, body) {
     return retry(async () => {
       const token = await this.getToken();
-      const response = await this.fetch(`${this.config.baseUrl}${endpoint}`, {
-        method,
-        headers: { Authorization: `Bearer ${token}`, "content-type": "application/json;charset=UTF-8" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-      const json = await response.json();
+      let response; let json;
+      try {
+        ({ response, json } = await this.fetchJson(`${this.config.baseUrl}${endpoint}`, {
+          method,
+          headers: { Authorization: `Bearer ${token}`, "content-type": "application/json;charset=UTF-8" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }));
+      } catch (cause) {
+        const error = new Error(`飞书接口请求超时或网络异常 (${endpoint})`);
+        error.retryable = true;
+        error.cause = cause;
+        throw error;
+      }
       if (!response.ok || json.code !== 0) {
-        const error = new Error(`飞书接口失败：${json.msg || response.status} (${endpoint})`);
+        const message = json.msg || response.status;
+        const error = new Error(`飞书接口失败：${message} (${endpoint})`);
         error.status = response.status;
         error.code = json.code;
         error.response = json;
+        error.retryable = /data not ready|数据未就绪/i.test(String(message));
         throw error;
       }
       return json.data;
-    }, { shouldRetry: (error) => error.status === 429 || error.status >= 500 || [99991400, 99991401, 99991402].includes(error.code) });
+    }, { shouldRetry: (error) => error.retryable || error.status === 429 || error.status >= 500 || [99991400, 99991401, 99991402].includes(error.code) });
   }
 
   tablePath(tableId, suffix = "") {
@@ -54,10 +90,21 @@ export class FeishuClient {
   async ensureTable(name, fields) {
     const existing = (await this.listTables()).find((table) => table.name === name);
     if (existing) return existing;
-    const data = await this.request("POST", `/bitable/v1/apps/${this.config.baseToken}/tables`, {
-      table: { name, default_view_name: "表格", fields },
-    });
-    return data.table || data;
+    try {
+      const data = await this.request("POST", `/bitable/v1/apps/${this.config.baseToken}/tables`, {
+        table: { name, default_view_name: "表格", fields },
+      });
+      return data.table || data;
+    } catch (error) {
+      // 并发回填可能同时发现表不存在；另一任务成功建表后，复用该表而不是将正常竞争视为失败。
+      if (error.code !== 1254013) throw error;
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await sleep(300 * (attempt + 1));
+        const created = (await this.listTables()).find((table) => table.name === name);
+        if (created) return created;
+      }
+      throw error;
+    }
   }
 
   async listFields(tableId) {
@@ -114,6 +161,17 @@ export class FeishuClient {
     return results;
   }
 
+  async batchDelete(tableId, recordIds) {
+    let deleted = 0;
+    for (let i = 0; i < recordIds.length; i += 500) {
+      const records = recordIds.slice(i, i + 500);
+      await this.request("POST", this.tablePath(tableId, "/records/batch_delete"), { records });
+      deleted += records.length;
+      if (i + 500 < recordIds.length) await sleep(120);
+    }
+    return { deleted };
+  }
+
   async batchCreateSafe(tableId, records) {
     const output = { succeeded: [], failures: [] };
     const write = async (chunk) => {
@@ -158,7 +216,7 @@ export class FeishuClient {
     return output;
   }
 
-  async upsert(tableId, incoming, { keyField = "同步唯一键", legacyKey }) {
+  async upsert(tableId, incoming, { keyField = "同步唯一键", legacyKey, updateExisting = true }) {
     if (!incoming.length) return { total: 0, created: 0, updated: 0, failed: 0, failures: [] };
     await this.ensureField(tableId, keyField, 1);
     const existing = await this.listRecords(tableId);
@@ -169,21 +227,28 @@ export class FeishuClient {
     }
     const creates = [];
     const updates = [];
+    const skipped = [];
+    let existingCount = 0;
     for (const item of incoming) {
       const key = String(item[keyField] || "");
-      if (!key) continue;
+      if (!key) {
+        skipped.push({ operation: "validate", key: "", reason: `缺少唯一键字段：${keyField}` });
+        continue;
+      }
       const recordId = index.get(key);
-      if (recordId) updates.push({ record_id: recordId, fields: item });
+      if (recordId && updateExisting) updates.push({ record_id: recordId, fields: item });
+      else if (recordId) existingCount += 1;
       else creates.push(item);
     }
     const createResult = await this.batchCreateSafe(tableId, creates);
     const updateResult = await this.batchUpdateSafe(tableId, updates);
     const failures = [
+      ...skipped,
       ...createResult.failures.map((failure) => ({ operation: "create", ...failure })),
       ...updateResult.failures.map((failure) => ({ operation: "update", ...failure })),
     ];
     const created = createResult.succeeded.length;
-    const updated = updateResult.succeeded.length;
+    const updated = updateResult.succeeded.length + existingCount;
     return { total: incoming.length, created, updated, failed: failures.length, failures };
   }
 }
