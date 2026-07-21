@@ -1,16 +1,20 @@
 import http from "node:http";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getConfig } from "./config.js";
 import { FeishuClient } from "./feishu-client.js";
 import { createDeliveryKdzsClient } from "./session-provider.js";
-import { NewBaseSyncService } from "./new-base-sync.js";
-import { NewPayrollService } from "./new-payroll.js";
 import { DeliverySyncService } from "./delivery-sync.js";
+import { DashboardService } from "./dashboard-service.js";
 import { addDays, dateOnly, previousMonth } from "./utils.js";
 
 const config = getConfig({ requireKdzs: false });
 const feishu = new FeishuClient(config.feishu);
 const sourceFeishu = config.feishu.sourceBaseToken
   ? new FeishuClient({ ...config.feishu, baseToken: config.feishu.sourceBaseToken }) : null;
+const dashboard = new DashboardService({ feishu, cacheSeconds: config.runtime.dashboardCacheSeconds });
+const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 const state = {
   startedAt: new Date().toISOString(),
   schedulerEnabled: config.runtime.schedulerEnabled,
@@ -137,15 +141,74 @@ function responseBody() {
   };
 }
 
-const server = http.createServer((request, response) => {
-  if (request.url === "/health" || request.url === "/ready" || request.url === "/") {
+const CONTENT_TYPES = {
+  ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8", ".png": "image/png", ".svg": "image/svg+xml",
+};
+
+function json(response, status, body) {
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  response.end(JSON.stringify(body));
+}
+
+function dashboardAuthorized(request, url) {
+  const expected = config.runtime.dashboardAccessToken;
+  if (!expected) return true;
+  return request.headers["x-dashboard-access"] === expected || url.searchParams.get("access") === expected;
+}
+
+async function servePublic(response, pathname) {
+  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const target = path.resolve(publicDir, relative);
+  if (!target.startsWith(`${publicDir}${path.sep}`) && target !== path.join(publicDir, "index.html")) return false;
+  try {
+    const body = await fs.readFile(target);
+    response.writeHead(200, {
+      "content-type": CONTENT_TYPES[path.extname(target)] || "application/octet-stream",
+      "cache-control": target.endsWith("index.html") ? "no-cache" : "public, max-age=300",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": "default-src 'self'; script-src 'self' https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'self' https://*.feishu.cn https://*.larksuite.com",
+    });
+    response.end(body);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+const server = http.createServer(async (request, response) => {
+  const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+  if (url.pathname === "/health" || url.pathname === "/ready") {
     const body = responseBody();
     response.writeHead(body.status === "ok" ? 200 : 503, { "content-type": "application/json; charset=utf-8" });
     response.end(JSON.stringify(body));
     return;
   }
-  response.writeHead(404, { "content-type": "application/json; charset=utf-8" });
-  response.end(JSON.stringify({ error: "not_found" }));
+  if (url.pathname === "/api/dashboard") {
+    if (!dashboardAuthorized(request, url)) return json(response, 401, { error: "unauthorized" });
+    try {
+      const data = await dashboard.getDashboard({
+        date: url.searchParams.get("date") || undefined,
+        store: url.searchParams.get("store") || "全部店铺",
+        platform: url.searchParams.get("platform") || "全部平台",
+        basis: url.searchParams.get("basis") || "placed",
+        role: url.searchParams.get("role") || "全部角色",
+      });
+      data.links = { feishu: config.runtime.feishuBaseUrl, doubao: config.runtime.doubaoAiUrl };
+      return json(response, 200, data);
+    } catch (error) {
+      console.error(error);
+      return json(response, 500, { error: "dashboard_data_failed", message: error.message });
+    }
+  }
+  try {
+    if (request.method === "GET" && await servePublic(response, url.pathname)) return;
+  } catch (error) {
+    console.error(error);
+    return json(response, 500, { error: "static_file_failed" });
+  }
+  return json(response, 404, { error: "not_found" });
 });
 
 server.listen(config.runtime.port, "0.0.0.0", () => {

@@ -59,6 +59,10 @@ export function getConfig({ requireKdzs = true } = {}) {
       syncEnabled: String(process.env.SYNC_ENABLED || "false").toLowerCase() === "true",
       healthIntervalMinutes: integer("HEALTH_INTERVAL_MINUTES", 10),
       sessionTableId: process.env.FEISHU_SESSION_TABLE_ID || "tblDvIDJSSxHqKj8",
+      dashboardAccessToken: process.env.DASHBOARD_ACCESS_TOKEN || "",
+      dashboardCacheSeconds: integer("DASHBOARD_CACHE_SECONDS", 90),
+      feishuBaseUrl: process.env.FEISHU_BASE_URL || "https://dcnx0esypql0.feishu.cn/base/SgoybTSbCa1G25s81rbcsBcxnJd",
+      doubaoAiUrl: process.env.DOUBAO_AI_URL || "https://www.doubao.com/",
     },
     logLevel: process.env.LOG_LEVEL || "info",
   };

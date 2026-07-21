@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e14">
+  <title>直播经营工作台</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <a class="brand" href="/" aria-label="直播经营工作台首页">
+        <span class="brand-mark"><i data-lucide="command"></i></span>
+        <span><strong>经营工作台</strong><small>ERP 数据直连</small></span>
+      </a>
+      <nav class="side-nav">
+        <button class="nav-item active" data-view="owner"><i data-lucide="layout-dashboard"></i><span>老板总览</span></button>
+        <button class="nav-item" data-view="streamer"><i data-lucide="radio"></i><span>主播工作台</span></button>
+        <button class="nav-item" data-view="control"><i data-lucide="sliders-horizontal"></i><span>中控工作台</span></button>
+        <button class="nav-item" data-view="collab"><i data-lucide="users-round"></i><span>直播协同</span></button>
+      </nav>
+      <div class="side-bottom">
+        <a class="utility-link" id="feishu-link" target="_blank" rel="noreferrer"><i data-lucide="table-2"></i><span>查看飞书原始表</span></a>
+        <a class="utility-link" id="doubao-link" target="_blank" rel="noreferrer"><i data-lucide="sparkles"></i><span>打开豆包 AI</span></a>
+        <div class="sync-state"><span class="status-dot"></span><span><strong>自动同步中</strong><small id="sync-label">正在读取 ERP 数据</small></span></div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow" id="page-eyebrow">经营数据一眼看完</p>
+          <h1 id="page-title">老板经营总览</h1>
+        </div>
+        <div class="header-actions">
+          <button class="icon-btn" id="refresh-btn" title="刷新数据" aria-label="刷新数据"><i data-lucide="refresh-cw"></i></button>
+          <span class="source-badge"><i data-lucide="shield-check"></i> ERP 原值</span>
+        </div>
+      </header>
+
+      <section class="filters" aria-label="数据筛选">
+        <label><span>日期</span><select id="date-filter" aria-label="选择日期"></select></label>
+        <label><span>店铺</span><select id="store-filter" aria-label="选择店铺"><option>全部店铺</option></select></label>
+        <label><span>平台</span><select id="platform-filter" aria-label="选择平台"><option>全部平台</option></select></label>
+        <label><span>结算口径</span><select id="basis-filter" aria-label="选择结算口径">
+          <option value="placed">下单口径</option>
+          <option value="shipped">昨日已发货</option>
+          <option value="monthly">月度扣售后</option>
+        </select></label>
+        <label id="person-role-filter"><span>员工角色</span><select id="role-filter" aria-label="选择员工角色"><option>全部角色</option></select></label>
+      </section>
+
+      <div id="loading" class="state-panel"><span class="loader"></span><strong>正在读取 ERP 数据</strong><small>首次加载可能需要几秒钟</small></div>
+      <div id="error" class="state-panel error hidden"><i data-lucide="circle-alert"></i><strong>暂时无法读取数据</strong><small id="error-message"></small><button id="retry-btn">重新加载</button></div>
+
+      <section id="dashboard" class="dashboard hidden">
+        <div class="data-note"><i data-lucide="database"></i><span id="data-note"></span><strong id="data-date"></strong></div>
+
+        <section class="view active" id="view-owner">
+          <div class="hero-grid">
+            <article class="hero-card gradient-card">
+              <div class="hero-head"><span>今日经营结果</span><i data-lucide="trending-up"></i></div>
+              <div class="hero-metrics">
+                <div><small>今日销售额</small><strong id="owner-sales">—</strong></div>
+                <div><small>ERP 利润</small><strong id="owner-profit">—</strong></div>
+                <div><small>今日退款</small><strong id="owner-refund">—</strong></div>
+                <div><small>错发损耗</small><strong id="owner-loss">—</strong></div>
+              </div>
+            </article>
+            <article class="metric-card month-card"><span class="metric-icon blue"><i data-lucide="calendar-range"></i></span><small>本月 ERP 利润</small><strong id="month-profit">—</strong><p>已包含 ERP 售后结果</p></article>
+          </div>
+
+          <div class="content-grid two-thirds">
+            <article class="panel">
+              <div class="panel-head"><div><p class="eyebrow">人员收入</p><h2>今日提成一览</h2></div><span class="pill" id="basis-label"></span></div>
+              <div class="table-wrap"><table><thead><tr><th>姓名</th><th>角色</th><th>店铺</th><th>比例</th><th>预计提成</th></tr></thead><tbody id="owner-commission-body"></tbody></table></div>
+            </article>
+            <article class="panel reminder-panel">
+              <div class="panel-head"><div><p class="eyebrow">经营提醒</p><h2>今天先处理什么</h2></div><span class="metric-icon orange"><i data-lucide="lightbulb"></i></span></div>
+              <div id="reminder-list" class="reminder-list"></div>
+              <a class="action-button" id="owner-doubao" target="_blank" rel="noreferrer"><i data-lucide="sparkles"></i>交给豆包继续分析<i data-lucide="arrow-up-right"></i></a>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" id="view-streamer">
+          <div class="stats-grid four">
+            <article class="metric-card"><span class="metric-icon orange"><i data-lucide="shopping-bag"></i></span><small>今日订单</small><strong id="stream-orders">—</strong><p>ERP 同步订单</p></article>
+            <article class="metric-card"><span class="metric-icon blue"><i data-lucide="badge-dollar-sign"></i></span><small>今日销售额</small><strong id="stream-sales">—</strong><p>不做二次核算</p></article>
+            <article class="metric-card emphasis"><span class="metric-icon orange"><i data-lucide="coins"></i></span><small>我的预估提成</small><strong id="stream-commission">—</strong><p id="stream-rate">按人员表比例</p></article>
+            <article class="metric-card"><span class="metric-icon blue"><i data-lucide="package-check"></i></span><small>昨日实际发货</small><strong id="stream-shipped">—</strong><p>昨日 ERP 实发数量</p></article>
+          </div>
+          <div class="content-grid two-thirds">
+            <article class="panel"><div class="panel-head"><div><p class="eyebrow">商品表现</p><h2>今日商品销售</h2></div><span class="pill">ERP 原始结果</span></div><div class="table-wrap"><table><thead><tr><th>商品</th><th>销量</th><th>销售额</th><th>ERP 利润</th></tr></thead><tbody id="stream-product-body"></tbody></table></div></article>
+            <article class="panel"><div class="panel-head"><div><p class="eyebrow">我的收入</p><h2>提成与扣款</h2></div><span class="metric-icon blue"><i data-lucide="receipt-text"></i></span></div><div id="stream-income" class="income-summary"></div><div id="stream-deductions" class="detail-list"></div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-control">
+          <div class="stats-grid four">
+            <article class="metric-card"><span class="metric-icon orange"><i data-lucide="shopping-cart"></i></span><small>今日成交订单</small><strong id="control-orders">—</strong><p>下单口径</p></article>
+            <article class="metric-card"><span class="metric-icon blue"><i data-lucide="truck"></i></span><small>昨日已发货</small><strong id="control-shipped">—</strong><p>发货口径</p></article>
+            <article class="metric-card"><span class="metric-icon orange"><i data-lucide="rotate-ccw"></i></span><small>今日售后</small><strong id="control-refunds">—</strong><p>ERP 退款数量</p></article>
+            <article class="metric-card emphasis"><span class="metric-icon blue"><i data-lucide="wallet-cards"></i></span><small>团队预估提成</small><strong id="control-commission">—</strong><p>固定比例自动计算</p></article>
+          </div>
+          <div class="content-grid halves">
+            <article class="panel"><div class="panel-head"><div><p class="eyebrow">团队激励</p><h2>分角色提成</h2></div><span class="pill">实时展示</span></div><div id="team-cards" class="team-cards"></div></article>
+            <article class="panel"><div class="panel-head"><div><p class="eyebrow">待处理</p><h2>扣款与异常明细</h2></div><span class="metric-icon orange"><i data-lucide="triangle-alert"></i></span></div><div id="control-deductions" class="detail-list"></div></article>
+          </div>
+        </section>
+
+        <section class="view" id="view-collab">
+          <div class="collab-banner">
+            <div><p class="eyebrow">今日直播方案</p><h2>三人只看同一份 ERP 原始数据</h2><p>主播、中控、助播的选品与话术由豆包生成；本系统不再自研分析算法。</p></div>
+            <a class="action-button light" id="collab-doubao" target="_blank" rel="noreferrer"><i data-lucide="sparkles"></i>生成今日排品<i data-lucide="arrow-up-right"></i></a>
+          </div>
+          <article class="panel"><div class="panel-head"><div><p class="eyebrow">共享数据源</p><h2>商品 · 销量 · 库存 · ERP 利润</h2></div><span class="pill">同步到飞书</span></div><div class="table-wrap wide"><table><thead><tr><th>顺序</th><th>商品名称</th><th>今日销量</th><th>销售额</th><th>库存</th><th>ERP 利润</th><th>数据状态</th></tr></thead><tbody id="collab-product-body"></tbody></table></div></article>
+          <div class="quick-actions">
+            <a id="collab-feishu" target="_blank" rel="noreferrer"><span class="metric-icon orange"><i data-lucide="table-2"></i></span><span><strong>打开飞书商品表</strong><small>查看全部原始商品与库存</small></span><i data-lucide="arrow-up-right"></i></a>
+            <a id="collab-ai" target="_blank" rel="noreferrer"><span class="metric-icon blue"><i data-lucide="bot"></i></span><span><strong>交给豆包 AI</strong><small>选品、排期、销量预估和话术</small></span><i data-lucide="arrow-up-right"></i></a>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <nav class="mobile-nav" aria-label="手机导航">
+      <button class="active" data-view="owner"><i data-lucide="layout-dashboard"></i><span>老板</span></button>
+      <button data-view="streamer"><i data-lucide="radio"></i><span>主播</span></button>
+      <button data-view="control"><i data-lucide="sliders-horizontal"></i><span>中控</span></button>
+      <button data-view="collab"><i data-lucide="users-round"></i><span>协同</span></button>
+    </nav>
+  </div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
