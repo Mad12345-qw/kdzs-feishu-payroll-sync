@@ -1,7 +1,9 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
-const state = { data: null, view: "owner", access: new URLSearchParams(location.search).get("access") || sessionStorage.getItem("dashboardAccess") || "" };
+const initialParams = new URLSearchParams(location.search);
+const initialView = ["owner", "streamer", "control", "collab"].includes(initialParams.get("view")) ? initialParams.get("view") : "owner";
+const state = { data: null, view: initialView, access: initialParams.get("access") || sessionStorage.getItem("dashboardAccess") || "" };
 if (state.access) sessionStorage.setItem("dashboardAccess", state.access);
 
 const currency = (value) => `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -108,6 +110,6 @@ $$('[data-view]').forEach((button) => button.addEventListener("click", () => swi
 [$("#date-filter"), $("#store-filter"), $("#platform-filter"), $("#basis-filter"), $("#role-filter")].forEach((element) => element.addEventListener("change", () => loadDashboard(true)));
 $("#refresh-btn").addEventListener("click", () => loadDashboard(true));
 $("#retry-btn").addEventListener("click", () => loadDashboard(true));
+switchView(state.view);
 if (window.lucide) window.lucide.createIcons();
 loadDashboard(false);
-
