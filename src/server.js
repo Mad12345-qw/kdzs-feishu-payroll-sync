@@ -18,6 +18,7 @@ const dashboard = new DashboardService({
   cacheSeconds: config.runtime.dashboardCacheSeconds,
   dashboardUrl: config.runtime.dashboardUrl,
   accessToken: config.runtime.dashboardAccessToken,
+  getKdzs: () => createDeliveryKdzsClient({ feishu: sourceFeishu, config }),
 });
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 const state = {

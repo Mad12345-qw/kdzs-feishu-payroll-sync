@@ -50,3 +50,19 @@ test("三种提成口径分别使用当日、昨日和整月 ERP 利润", async 
   assert.equal(shipped.commissions[0].grossCommission, 3.2);
   assert.equal(monthly.commissions[0].grossCommission, 3.6);
 });
+
+test("看板实时提成口径分别请求 ERP 的下单和发货时间类型", async () => {
+  const calls = [];
+  const kdzs = { listAll: async (_method, params) => {
+    calls.push(params);
+    return [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: params.queryTimeType === 1 ? 500 : 300 }];
+  } };
+  const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
+  const placed = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "placed" });
+  const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
+  const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
+  assert.deepEqual(calls.map((item) => item.queryTimeType), [1, 3, 3]);
+  assert.equal(placed.commissions[0].grossCommission, 15);
+  assert.equal(shipped.commissions[0].grossCommission, 6);
+  assert.equal(monthly.commissions[0].grossCommission, 3);
+});

@@ -1,4 +1,4 @@
-import { dateOnly, monthBounds, number, roundMoney, text } from "./utils.js";
+import { dateOnly, endOfDayString, monthBounds, number, roundMoney, startOfDayString, text } from "./utils.js";
 
 const TABLE_NAMES = {
   entry: "00_系统入口",
@@ -42,9 +42,10 @@ function selectRate(person, basis) {
 }
 
 export class DashboardService {
-  constructor({ feishu, kdzs = null, cacheSeconds = 90, dashboardUrl = "", accessToken = "", logger = console }) {
+  constructor({ feishu, kdzs = null, getKdzs = null, cacheSeconds = 90, dashboardUrl = "", accessToken = "", logger = console }) {
     this.feishu = feishu;
     this.kdzs = kdzs;
+    this.getKdzs = getKdzs;
     this.cacheMs = Math.max(15, cacheSeconds) * 1000;
     this.dashboardUrl = dashboardUrl.replace(/\/$/, "");
     this.accessToken = accessToken;
@@ -129,6 +130,27 @@ export class DashboardService {
     return records.map((record) => record.fields || {}).filter((row) => recordDate(row) === day);
   }
 
+  async queryCommissionBase({ date, yesterday, month, basis, store, platform }) {
+    const client = this.kdzs || (this.getKdzs ? await this.getKdzs() : null);
+    if (!client) return null;
+    const isPlaced = basis === "placed";
+    const isMonthly = basis === "monthly";
+    const day = isPlaced ? date : yesterday;
+    const bounds = isMonthly ? monthBounds(month) : {
+      start: new Date(`${day}T00:00:00+08:00`), end: new Date(`${day}T23:59:59+08:00`),
+    };
+    const items = await client.listAll("kdzs.erp.api.report.gross.profit", {
+      // 经实测，1 与 3 返回不同的统计集：下单展示使用 1，发货/月结使用 3。
+      queryTimeType: isPlaced ? 1 : 3,
+      queryGroupType: 2,
+      startTime: startOfDayString(bounds.start), endTime: endOfDayString(bounds.end),
+    });
+    return items.map((item) => ({
+      "店铺名称": text(item.sellerNick), "平台类型": text(item.platform), "利润": money(item.netSalesProfit),
+    })).filter((row) => (store === "全部店铺" || row["店铺名称"] === store)
+      && (platform === "全部平台" || row["平台类型"] === platform));
+  }
+
   async getDashboard({ date, store = "全部店铺", platform = "全部平台", basis = "placed", role = "全部角色" } = {}) {
     const safeBasis = ["placed", "shipped", "monthly"].includes(basis) ? basis : "placed";
     const key = JSON.stringify({ date, store, platform, basis: safeBasis, role });
@@ -151,7 +173,17 @@ export class DashboardService {
     const dayRows = overview.filter((row) => row.__date === selectedDate && matchesDimension(row));
     const yesterdayRows = overview.filter((row) => row.__date === yesterday && matchesDimension(row));
     const monthRows = overview.filter((row) => row.__date.startsWith(month) && matchesDimension(row));
-    const basisRows = safeBasis === "monthly" ? monthRows : safeBasis === "shipped" ? yesterdayRows : dayRows;
+    let basisRows = safeBasis === "monthly" ? monthRows : safeBasis === "shipped" ? yesterdayRows : dayRows;
+    let commissionSource = "飞书已同步的 ERP 数据";
+    try {
+      const liveRows = await this.queryCommissionBase({ date: selectedDate, yesterday, month, basis: safeBasis, store, platform });
+      if (liveRows) {
+        basisRows = liveRows;
+        commissionSource = "快递助手 ERP 实时毛利报表";
+      }
+    } catch (error) {
+      this.logger.warn(`提成口径实时查询失败，已回退到已同步 ERP 数据：${error.message}`);
+    }
 
     const people = peopleRecords.map((record) => record.fields || {}).filter((person) => scalar(person["启用提成展示"]) !== "否")
       .filter((person) => store === "全部店铺" || scalar(person["所属店铺"]) === store)
@@ -224,8 +256,8 @@ export class DashboardService {
       meta: {
         selectedDate, yesterday, month, latestDataDate: dates[0] || null, generatedAt: new Date().toISOString(),
         source: "快递助手 ERP → 飞书同步数据", basis: safeBasis,
-        basisLabel: safeBasis === "placed" ? "下单口径（当日 ERP）" : safeBasis === "shipped" ? "已发货口径（昨日 ERP）" : "月度扣售后口径（ERP 月度结果）",
-        note: "销售、利润、库存、售后均展示 ERP 返回值；系统只做提成比例乘法和人工扣款汇总。",
+        basisLabel: safeBasis === "placed" ? "下单成交（ERP 实时）" : safeBasis === "shipped" ? "昨日已发货（ERP 实时）" : "月度扣售后（ERP 实时）",
+        note: `销售、利润、库存、售后均展示 ERP 返回值；${commissionSource}用于本次提成基数，系统只做比例乘法和人工扣款汇总。`,
       },
       filters: { dates: dates.slice(0, 120), stores, platforms, roles: ROLE_ORDER },
       summary, commissions, team, deductions: selectedDeductions.slice(0, 30), products, reminders,
