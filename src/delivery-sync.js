@@ -238,6 +238,20 @@ export class DeliverySyncService {
     }
   }
 
+  // 客户复制多维表格后，旧表可能少了后来增加的 ERP 字段。先补字段再写入，
+  // 防止飞书以 FieldNameNotFound 拒绝整天的同步数据。
+  async ensureWriteFields(table, rows) {
+    if (!rows.length) return;
+    const existing = new Set((await this.feishu.listFields(table.id)).map((field) => field.field_name));
+    const dateFields = new Set(["日期", "同步时间", "结算时间", "完成时间"]);
+    for (const [name, value] of Object.entries(rows[0])) {
+      if (existing.has(name)) continue;
+      const type = dateFields.has(name) ? 5 : typeof value === "number" ? 2 : 1;
+      await this.feishu.ensureField(table.id, name, type);
+      existing.add(name);
+    }
+  }
+
   async upsert(table, rows, keyField = KEY) {
     if (!rows.length) return { total: 0, created: 0, updated: 0, failed: 0, failures: [] };
     return this.feishu.upsert(table.id, rows, { keyField, legacyKey: (fields) => scalar(fields[keyField]) });
@@ -294,6 +308,10 @@ export class DeliverySyncService {
       ]);
       const overviewRows = mapDailyOverview(storeItems, day);
       await this.ensureOverviewFilterFields(overviewRows);
+      await Promise.all([
+        this.ensureWriteFields(this.tables.dailyOverview, overviewRows),
+        this.ensureWriteFields(this.tables.storeProfit, mapStoreProfit(storeItems, day)),
+      ]);
       const result = {
         dailyOverview: await this.upsert(this.tables.dailyOverview, overviewRows),
         storeProfit: await this.upsert(this.tables.storeProfit, mapStoreProfit(storeItems, day)),
