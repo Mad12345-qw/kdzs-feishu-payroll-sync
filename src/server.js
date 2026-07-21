@@ -13,7 +13,12 @@ const config = getConfig({ requireKdzs: false });
 const feishu = new FeishuClient(config.feishu);
 const sourceFeishu = config.feishu.sourceBaseToken
   ? new FeishuClient({ ...config.feishu, baseToken: config.feishu.sourceBaseToken }) : null;
-const dashboard = new DashboardService({ feishu, cacheSeconds: config.runtime.dashboardCacheSeconds });
+const dashboard = new DashboardService({
+  feishu,
+  cacheSeconds: config.runtime.dashboardCacheSeconds,
+  dashboardUrl: config.runtime.dashboardUrl,
+  accessToken: config.runtime.dashboardAccessToken,
+});
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 const state = {
   startedAt: new Date().toISOString(),

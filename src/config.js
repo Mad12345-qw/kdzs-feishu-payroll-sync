@@ -61,6 +61,7 @@ export function getConfig({ requireKdzs = true } = {}) {
       sessionTableId: process.env.FEISHU_SESSION_TABLE_ID || "tblDvIDJSSxHqKj8",
       dashboardAccessToken: process.env.DASHBOARD_ACCESS_TOKEN || "",
       dashboardCacheSeconds: integer("DASHBOARD_CACHE_SECONDS", 90),
+      dashboardUrl: process.env.DASHBOARD_URL || "https://kdzs-feishu-payroll-sync.onrender.com",
       feishuBaseUrl: process.env.FEISHU_BASE_URL || "https://dcnx0esypql0.feishu.cn/base/SgoybTSbCa1G25s81rbcsBcxnJd",
       doubaoAiUrl: process.env.DOUBAO_AI_URL || "https://www.doubao.com/",
     },

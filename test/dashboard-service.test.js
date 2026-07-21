@@ -21,6 +21,7 @@ function fakeFeishu() {
     listTables: async () => tables,
     ensureField: async () => ({}),
     batchUpdateSafe: async () => ({ succeeded: [], failures: [] }),
+    batchCreateSafe: async () => ({ succeeded: [], failures: [] }),
     ensureTable: async (name) => {
       if (!tables.find((table) => table.name === name)) tables.push({ name, table_id: "deductions" });
       return tables.find((table) => table.name === name);

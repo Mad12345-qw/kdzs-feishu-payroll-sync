@@ -1,6 +1,7 @@
 import { dateOnly, monthBounds, number, roundMoney, text } from "./utils.js";
 
 const TABLE_NAMES = {
+  entry: "00_系统入口",
   overview: "01_每日财务汇总",
   people: "13_人员表",
   stock: "10_库存快照",
@@ -41,10 +42,12 @@ function selectRate(person, basis) {
 }
 
 export class DashboardService {
-  constructor({ feishu, kdzs = null, cacheSeconds = 90, logger = console }) {
+  constructor({ feishu, kdzs = null, cacheSeconds = 90, dashboardUrl = "", accessToken = "", logger = console }) {
     this.feishu = feishu;
     this.kdzs = kdzs;
     this.cacheMs = Math.max(15, cacheSeconds) * 1000;
+    this.dashboardUrl = dashboardUrl.replace(/\/$/, "");
+    this.accessToken = accessToken;
     this.logger = logger;
     this.tables = null;
     this.cache = new Map();
@@ -59,6 +62,18 @@ export class DashboardService {
 
   async ensureConfiguration() {
     const tables = await this.resolveTables();
+    const entry = await this.feishu.ensureTable(TABLE_NAMES.entry, [
+      { field_name: "名称", type: 1 }, { field_name: "访问链接", type: 1 }, { field_name: "说明", type: 1 }, { field_name: "更新时间", type: 5 },
+    ]);
+    this.tables[TABLE_NAMES.entry] = entry;
+    if (this.dashboardUrl) {
+      const link = this.accessToken ? `${this.dashboardUrl}/?access=${this.accessToken}` : this.dashboardUrl;
+      const existingEntry = await this.feishu.listRecords(entry.table_id);
+      const current = existingEntry.find((record) => scalar(record.fields?.["名称"]) === "打开经营工作台");
+      const fields = { "名称": "打开经营工作台", "访问链接": link, "说明": "老板总览、主播提成、中控与直播协同入口", "更新时间": Date.now() };
+      if (current) await this.feishu.batchUpdateSafe(entry.table_id, [{ record_id: current.record_id, fields }]);
+      else await this.feishu.batchCreateSafe(entry.table_id, [fields]);
+    }
     const people = tables[TABLE_NAMES.people];
     if (!people) throw new Error(`缺少数据表：${TABLE_NAMES.people}`);
     const fields = [
@@ -91,7 +106,7 @@ export class DashboardService {
       { field_name: "金额", type: 2 }, { field_name: "说明", type: 1 }, { field_name: "状态", type: 3 },
     ]);
     this.tables[TABLE_NAMES.deductions] = deductions;
-    return { people: records.length, defaultsUpdated: updates.length, deductionsTable: deductions.table_id };
+    return { people: records.length, defaultsUpdated: updates.length, deductionsTable: deductions.table_id, entryTable: entry.table_id };
   }
 
   async records(name) {
