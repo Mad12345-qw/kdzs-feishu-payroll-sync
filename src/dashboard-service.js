@@ -321,6 +321,11 @@ export class DashboardService {
       monthProfit: profit, afterSalesLoss: money((refunds || []).reduce((total, row) => total + number(row.refundAmount), 0)), misShipmentLoss: money(deductions.filter((row) => scalar(row["类型"]).includes("错发")).reduce((total, row) => total + number(row["金额"]), 0)),
     };
     const visibleDeductions = deductions.filter((row) => isOwner || scalar(row["姓名"]) === viewer.name).map((row) => ({ date: recordDate(row), name: scalar(row["姓名"]), role: scalar(row["角色"]), type: scalar(row["类型"] || "其他"), amount: money(row["金额"]), note: scalar(row["说明"]), status: scalar(row["状态"] || "已记录") }));
+    const activePeople = people.filter((person) => scalar(person["启用提成展示"]) !== "否");
+    const configurationReminders = [...new Set(activePeople.map((person) => scalar(person["所属店铺"])).filter(Boolean))].flatMap((personStore) => {
+      const missing = ROLES.filter((role) => !activePeople.some((person) => scalar(person["所属店铺"]) === personStore && scalar(person["角色"] || "主播") === role));
+      return missing.length ? [`店铺「${personStore}」尚未配置${missing.join("、")}；对应岗位份额暂不发放，请在 13_人员表补齐人员角色。`] : [];
+    });
     const response = {
       viewer, period: range, rules: isOwner ? rules : null,
       meta: { selectedDate: range.endDate, latestDataDate: range.endDate, basis: safeBasis, basisLabel: safeBasis === "placed" ? "下单成交" : safeBasis === "shipped" ? "已发货" : "月度扣售后", source: "快递助手 ERP 原始接口 → 飞书同步", generatedAt: new Date().toISOString(), isOwner },
@@ -330,7 +335,7 @@ export class DashboardService {
       team: isOwner ? ROLES.map((role) => ({ role, pending: commissions.some((item) => item.role === role && item.pending), commission: commissions.some((item) => item.role === role && item.pending) ? null : money(commissions.filter((item) => item.role === role).reduce((total, item) => total + number(item.commission), 0)) })).filter((item) => item.commission != null || item.pending || people.some((p) => scalar(p["角色"]) === item.role)) : [],
       deductions: visibleDeductions,
       products: employeeProducts,
-      reminders: isOwner ? [`${range.label} ERP 利润与售后均来自快递助手原始返回；错发扣款只从责任人个人提成扣除。`] : [],
+      reminders: isOwner ? [`${range.label} ERP 利润与售后均来自快递助手原始返回；错发扣款只从责任人个人提成扣除。`, ...configurationReminders] : [],
     };
     this.cache.set(key, { time: Date.now(), value: response });
     return response;
