@@ -1,4 +1,5 @@
 import http from "node:http";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -157,6 +158,32 @@ function dashboardAuthorized(request, url) {
   return request.headers["x-dashboard-access"] === expected || url.searchParams.get("access") === expected;
 }
 
+function base64url(value) { return Buffer.from(value).toString("base64url"); }
+function issueViewerToken(viewer) {
+  const payload = base64url(JSON.stringify({ ...viewer, exp: Date.now() + 12 * 60 * 60 * 1000 }));
+  const signature = crypto.createHmac("sha256", config.runtime.dashboardSessionSecret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+function readViewerToken(token) {
+  try {
+    const [payload, signature] = String(token || "").split(".");
+    const expected = crypto.createHmac("sha256", config.runtime.dashboardSessionSecret).update(payload).digest("base64url");
+    if (!payload || !signature || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+    const viewer = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    return viewer.exp > Date.now() ? viewer : null;
+  } catch { return null; }
+}
+function viewerFromRequest(request, url) {
+  if (dashboardAuthorized(request, url)) return { scope: "owner", name: "老板", role: "老板", store: "全部店铺" };
+  return readViewerToken(String(request.headers.authorization || "").replace(/^Bearer\s+/i, ""));
+}
+async function requestBody(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  if (!chunks.length) return {};
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
 async function servePublic(response, pathname) {
   const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
   const target = path.resolve(publicDir, relative);
@@ -186,20 +213,48 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   if (url.pathname === "/api/dashboard") {
-    if (!dashboardAuthorized(request, url)) return json(response, 401, { error: "unauthorized" });
+    const viewer = viewerFromRequest(request, url);
+    if (!viewer) return json(response, 401, { error: "unauthorized" });
     try {
       const data = await dashboard.getDashboard({
         date: url.searchParams.get("date") || undefined,
+        period: url.searchParams.get("period") || "today",
+        startDate: url.searchParams.get("startDate") || undefined,
+        endDate: url.searchParams.get("endDate") || undefined,
         store: url.searchParams.get("store") || "全部店铺",
         platform: url.searchParams.get("platform") || "全部平台",
         basis: url.searchParams.get("basis") || "placed",
-        role: url.searchParams.get("role") || "全部角色",
+        viewer,
       });
-      data.links = { feishu: config.runtime.feishuBaseUrl, doubao: config.runtime.doubaoAiUrl };
+      // 员工端不返回全量多维表格入口，避免通过原始表绕过个人数据隔离。
+      data.links = viewer.scope === "owner"
+        ? { feishu: config.runtime.feishuBaseUrl, doubao: config.runtime.doubaoAiUrl }
+        : { doubao: config.runtime.doubaoAiUrl };
       return json(response, 200, data);
     } catch (error) {
       console.error(error);
       return json(response, 500, { error: "dashboard_data_failed", message: error.message });
+    }
+  }
+  if (url.pathname === "/api/login" && request.method === "POST") {
+    try {
+      const body = await requestBody(request);
+      const viewer = await dashboard.authenticate(body.account, body.pin);
+      if (!viewer) return json(response, 401, { error: "login_failed", message: "账号或 PIN 不正确，或该账号尚未启用。" });
+      return json(response, 200, { token: issueViewerToken(viewer), viewer });
+    } catch (error) {
+      return json(response, 400, { error: "invalid_login_request", message: error.message });
+    }
+  }
+  if (url.pathname === "/api/rules" && request.method === "POST") {
+    const viewer = viewerFromRequest(request, url);
+    if (!viewer || viewer.scope !== "owner") return json(response, 403, { error: "owner_only" });
+    try {
+      const body = await requestBody(request);
+      const rules = await dashboard.saveRules(body.rules || {}, body.effectiveDate);
+      return json(response, 200, { rules });
+    } catch (error) {
+      return json(response, 400, { error: "rule_save_failed", message: error.message });
     }
   }
   try {

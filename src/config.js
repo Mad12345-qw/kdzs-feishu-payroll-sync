@@ -60,6 +60,7 @@ export function getConfig({ requireKdzs = true } = {}) {
       healthIntervalMinutes: integer("HEALTH_INTERVAL_MINUTES", 10),
       sessionTableId: process.env.FEISHU_SESSION_TABLE_ID || "tblDvIDJSSxHqKj8",
       dashboardAccessToken: process.env.DASHBOARD_ACCESS_TOKEN || "",
+      dashboardSessionSecret: process.env.DASHBOARD_SESSION_SECRET || process.env.DASHBOARD_ACCESS_TOKEN || "dashboard-session-change-me",
       dashboardCacheSeconds: integer("DASHBOARD_CACHE_SECONDS", 90),
       dashboardUrl: process.env.DASHBOARD_URL || "https://kdzs-feishu-payroll-sync.onrender.com",
       feishuBaseUrl: process.env.FEISHU_BASE_URL || "https://dcnx0esypql0.feishu.cn/base/SgoybTSbCa1G25s81rbcsBcxnJd",
