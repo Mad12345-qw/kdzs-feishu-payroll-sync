@@ -19,7 +19,7 @@ html { background: var(--bg); }
 body { margin: 0; min-width: 320px; min-height: 100vh; font-family: Inter, "Noto Sans SC", system-ui, sans-serif; color: var(--text); background:
   radial-gradient(circle at 88% 4%, rgba(45,125,255,.12), transparent 28rem),
   radial-gradient(circle at 10% 92%, rgba(255,108,42,.08), transparent 28rem), var(--bg); }
-button, select { font: inherit; }
+button, input { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
 a { color: inherit; text-decoration: none; }
 .app-shell { min-height: 100vh; }
@@ -84,11 +84,6 @@ h2 { margin-bottom: 0; font-size: 20px; letter-spacing: -.02em; }
 .login-card input { height: 44px; border: 1px solid var(--line); border-radius: 10px; padding: 0 12px; color: #fff; background: #222a37; outline: none; }
 .login-card .action-button { width: 100%; margin: 20px 0 0; border: 0; cursor: pointer; }
 .login-card small { display: block; min-height: 20px; margin-top: 10px; color: #ff9b68; font-size: 11px; }
-.filters { max-width: 1440px; margin: 26px auto 18px; display: grid; grid-template-columns: repeat(5, minmax(140px, 1fr)); gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 16px; background: rgba(18,22,31,.78); box-shadow: var(--shadow); }
-.filters label { min-width: 0; }
-.filters label > span { display: block; padding: 0 4px 6px; color: var(--muted); font-size: 10px; font-weight: 700; }
-.filters select { width: 100%; height: 40px; padding: 0 34px 0 11px; border: 1px solid rgba(255,255,255,.06); border-radius: 10px; outline: none; color: #edf0f6; background: #202632; cursor: pointer; }
-.filters select:focus { border-color: rgba(69,137,255,.65); box-shadow: 0 0 0 3px rgba(45,125,255,.12); }
 .dashboard, .state-panel { max-width: 1440px; margin: auto; }
 .hidden { display: none !important; }
 .state-panel { min-height: 360px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--muted); }
@@ -214,7 +209,6 @@ td.money { color: #ffad63; font-weight: 700; }
 }
 @media (max-width: 560px) {
   h1 { font-size: 27px; }
-  .filters select { font-size: 12px; }
   .hero-metrics { margin-top: 33px; }
   .hero-metrics > div { padding: 0 13px; }
   .hero-metrics strong { font-size: 23px; }
