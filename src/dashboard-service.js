@@ -171,12 +171,10 @@ export class DashboardService {
     return table ? this.feishu.listRecords(table.table_id) : [];
   }
 
-  async getRules(asOf) {
-    const table = (await this.resolveTables())[TABLE_NAMES.rules] || this.tables[TABLE_NAMES.rules];
-    const rows = table ? await this.feishu.listRecords(table.table_id) : [];
+  rulesFromRecords(rows, asOf) {
     const output = { ...DEFAULT_RULES };
     for (const [name] of Object.entries(DEFAULT_RULES)) {
-      const candidates = rows.filter((record) => scalar(record.fields?.["规则项"]) === name && scalar(record.fields?.["状态"]) !== "停用")
+      const candidates = (rows || []).filter((record) => scalar(record.fields?.["规则项"]) === name && scalar(record.fields?.["状态"]) !== "停用")
         .filter((record) => !parseDate(record.fields?.["生效日期"]) || parseDate(record.fields?.["生效日期"]) <= asOf)
         .sort((a, b) => number(b.fields?.["生效日期"]) - number(a.fields?.["生效日期"]));
       if (candidates.length) output[name] = number(candidates[0].fields?.["数值"]);
@@ -187,6 +185,23 @@ export class DashboardService {
     output["中控分配比例"] = clampRate(output["中控分配比例"]);
     output["助播分配比例"] = clampRate(output["助播分配比例"]);
     return output;
+  }
+
+  async getRules(asOf) {
+    const table = (await this.resolveTables())[TABLE_NAMES.rules] || this.tables[TABLE_NAMES.rules];
+    const rows = table ? await this.feishu.listRecords(table.table_id) : [];
+    return this.rulesFromRecords(rows, asOf);
+  }
+
+  // These are slow-changing Feishu configuration records. The web request receives this
+  // bundle from PostgreSQL, so changing a page filter never has to wait for Feishu.
+  async loadReferenceData() {
+    const configuration = await this.ensureConfiguration();
+    const [peopleRecords, overviewRecords, stockRecords, deductionRecords, ruleRecords] = await Promise.all([
+      this.records(TABLE_NAMES.people), this.records(TABLE_NAMES.overview), this.records(TABLE_NAMES.stock),
+      this.records(TABLE_NAMES.deductions), this.records(TABLE_NAMES.rules),
+    ]);
+    return { configuration, peopleRecords, overviewRecords, stockRecords, deductionRecords, ruleRecords, refreshedAt: new Date().toISOString() };
   }
 
   async saveRules(input, effectiveDate = chinaDate()) {
@@ -291,16 +306,14 @@ export class DashboardService {
     });
   }
 
-  async getDashboard({ date, period = "today", startDate, endDate, store = "全部店铺", platform = "全部平台", basis = "placed", viewer = { scope: "owner" }, rawRows = null } = {}) {
+  async getDashboard({ date, period = "today", startDate, endDate, store = "全部店铺", platform = "全部平台", basis = "placed", viewer = { scope: "owner" }, rawRows = null, referenceData = null } = {}) {
     const range = dashboardDateRange(period, date, startDate, endDate);
     const safeBasis = ["placed", "shipped", "monthly"].includes(basis) ? basis : "placed";
     const key = JSON.stringify({ ...range, store, platform, basis: safeBasis, viewer });
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.time < this.cacheMs) return cached.value;
-    const configuration = await this.ensureConfiguration();
-    const [peopleRecords, overviewRecords, stockRecords, deductionRecords] = await Promise.all([
-      this.records(TABLE_NAMES.people), this.records(TABLE_NAMES.overview), this.records(TABLE_NAMES.stock), this.records(TABLE_NAMES.deductions),
-    ]);
+    const reference = referenceData || await this.loadReferenceData();
+    const { configuration, peopleRecords, overviewRecords, stockRecords, deductionRecords, ruleRecords } = reference;
     const people = peopleRecords.map((record) => record.fields || {});
     const isOwner = viewer.scope === "owner";
     const effectiveStore = isOwner ? store : viewer.store;
@@ -344,7 +357,7 @@ export class DashboardService {
       .filter((person) => viewer.scope === "owner" || scalar(person["姓名"]) === viewer.name)
       .filter((person) => effectiveStore === "全部店铺" || scalar(person["所属店铺"]) === effectiveStore)
       .filter((person) => viewer.scope === "owner" ? true : scalar(person["所属店铺"]) === viewer.store);
-    const rules = await this.getRules(range.endDate);
+    const rules = this.rulesFromRecords(ruleRecords, range.endDate);
     const products = this.calculateProducts(productRows || [], rules, people, range.startDate, range.endDate);
     const currentCached = rawRows ? cachedData(rawRows, range.startDate, range.endDate, queryType, effectiveStore, platform) : null;
     const profitPending = Boolean(ordersLive?.orderCount > 0 && profitRowsLive && profitRowsLive.length === 0);

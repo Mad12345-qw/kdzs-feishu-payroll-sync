@@ -42,6 +42,12 @@ export class DashboardSnapshotStore {
           generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           PRIMARY KEY (cache_date, time_basis)
         )
+      `)).then(() => this.pool.query(`
+        CREATE TABLE IF NOT EXISTS dashboard_reference_cache (
+          cache_key TEXT PRIMARY KEY,
+          payload JSONB NOT NULL,
+          generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
       `)).then(() => { this.initialized = true; return true; }).finally(() => { this.initializing = null; });
     }
     return this.initializing;
@@ -95,6 +101,28 @@ export class DashboardSnapshotStore {
       ORDER BY cache_date, time_basis
     `, [startDate, endDate]);
     return result.rows;
+  }
+
+  async writeReference(payload) {
+    if (!payload || !(await this.ensure())) return false;
+    await this.pool.query(`
+      INSERT INTO dashboard_reference_cache (cache_key, payload, generated_at)
+      VALUES ('dashboard_reference', $1::jsonb, NOW())
+      ON CONFLICT (cache_key) DO UPDATE SET payload = EXCLUDED.payload, generated_at = EXCLUDED.generated_at
+    `, [JSON.stringify(payload)]);
+    this.memory.set('dashboard_reference', { payload: structuredClone(payload), generatedAt: new Date().toISOString() });
+    return true;
+  }
+
+  async readReference() {
+    if (!(await this.ensure())) return null;
+    const cached = this.memory.get('dashboard_reference');
+    if (cached) return structuredClone(cached.payload);
+    const result = await this.pool.query("SELECT payload, generated_at FROM dashboard_reference_cache WHERE cache_key = 'dashboard_reference'");
+    if (!result.rows.length) return null;
+    const row = result.rows[0];
+    this.memory.set('dashboard_reference', { payload: row.payload, generatedAt: new Date(row.generated_at).toISOString() });
+    return structuredClone(row.payload);
   }
 
   decorate(snapshot) {

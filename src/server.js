@@ -41,6 +41,13 @@ const state = {
   dashboardSnapshotRunning: false,
   lastDashboardSnapshotAt: null,
   lastDashboardSnapshotError: null,
+  dashboardReferenceRunning: false,
+  lastDashboardReferenceAt: null,
+  lastDashboardReferenceError: null,
+  dashboardRawCacheRunning: false,
+  dashboardRawCacheProgress: null,
+  lastDashboardRawCacheAt: null,
+  lastDashboardRawCacheError: null,
   erpStockTotal: null,
   baseTableCount: null,
 };
@@ -50,6 +57,7 @@ let dailyRunning = false;
 let lastDailyDate = "";
 let dashboardSnapshotRunning = false;
 let dashboardRawCacheRunning = false;
+let dashboardReferenceRunning = false;
 
 function chinaDay() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -82,16 +90,30 @@ async function cacheDashboardDay(client, day) {
 async function refreshDashboardRawCache({ fullMonth = false } = {}) {
   if (dashboardRawCacheRunning) return false;
   dashboardRawCacheRunning = true;
+  state.dashboardRawCacheRunning = true;
   try {
     const today = chinaDay();
     const start = fullMonth ? `${today.slice(0, 7)}-01` : dateOnly(addDays(new Date(`${today}T00:00:00+08:00`), -2));
     const client = await createDeliveryKdzsClient({ feishu: sourceFeishu, config });
-    for (const day of dateSeries(start, today)) await cacheDashboardDay(client, day);
+    const dates = dateSeries(start, today);
+    state.dashboardRawCacheProgress = { completedDays: 0, totalDays: dates.length, currentDate: dates[0] || null };
+    for (const [index, day] of dates.entries()) {
+      state.dashboardRawCacheProgress = { completedDays: index, totalDays: dates.length, currentDate: day };
+      await cacheDashboardDay(client, day);
+      state.dashboardRawCacheProgress = { completedDays: index + 1, totalDays: dates.length, currentDate: day };
+    }
+    state.lastDashboardRawCacheAt = new Date().toISOString();
+    state.lastDashboardRawCacheError = null;
+    void refreshDashboardSnapshot();
     return true;
   } catch (error) {
+    state.lastDashboardRawCacheError = error.message;
     console.error(error);
     return false;
-  } finally { dashboardRawCacheRunning = false; }
+  } finally {
+    dashboardRawCacheRunning = false;
+    state.dashboardRawCacheRunning = false;
+  }
 }
 
 async function refreshDashboardSnapshot() {
@@ -100,7 +122,14 @@ async function refreshDashboardSnapshot() {
   state.dashboardSnapshotRunning = true;
   try {
     const options = { period: "today", store: "全部店铺", platform: "全部平台", basis: "placed", viewer: { scope: "owner", name: "老板", role: "老板", store: "全部店铺" } };
-    const data = await dashboard.getDashboard(options);
+    const range = dashboardDateRange(options.period);
+    const previous = dateOnly(addDays(new Date(`${range.startDate}T00:00:00+08:00`), -1));
+    const [rawRows, reference] = await Promise.all([
+      dashboardSnapshots.readDailyRange([range.startDate, previous, `${range.endDate.slice(0, 7)}-01`].sort()[0], range.endDate),
+      dashboardSnapshots.readReference(),
+    ]);
+    if (!reference || !rawRows.some((row) => row.date === range.endDate && Number(row.time_basis) === 1)) return false;
+    const data = await dashboard.getDashboard({ ...options, rawRows, referenceData: reference });
     await dashboardSnapshots.write(options, data);
     state.lastDashboardSnapshotAt = new Date().toISOString();
     state.lastDashboardSnapshotError = null;
@@ -112,6 +141,26 @@ async function refreshDashboardSnapshot() {
   } finally {
     dashboardSnapshotRunning = false;
     state.dashboardSnapshotRunning = false;
+  }
+}
+
+async function refreshDashboardReferenceCache() {
+  if (dashboardReferenceRunning) return false;
+  dashboardReferenceRunning = true;
+  state.dashboardReferenceRunning = true;
+  try {
+    const reference = await dashboard.loadReferenceData();
+    await dashboardSnapshots.writeReference(reference);
+    state.lastDashboardReferenceAt = new Date().toISOString();
+    state.lastDashboardReferenceError = null;
+    return true;
+  } catch (error) {
+    state.lastDashboardReferenceError = error.message;
+    console.error(error);
+    return false;
+  } finally {
+    dashboardReferenceRunning = false;
+    state.dashboardReferenceRunning = false;
   }
 }
 
@@ -214,6 +263,13 @@ function responseBody() {
     dashboardSnapshotRunning: state.dashboardSnapshotRunning,
     lastDashboardSnapshotAt: state.lastDashboardSnapshotAt,
     lastDashboardSnapshotError: state.lastDashboardSnapshotError,
+    dashboardReferenceRunning: state.dashboardReferenceRunning,
+    lastDashboardReferenceAt: state.lastDashboardReferenceAt,
+    lastDashboardReferenceError: state.lastDashboardReferenceError,
+    dashboardRawCacheRunning: state.dashboardRawCacheRunning,
+    dashboardRawCacheProgress: state.dashboardRawCacheProgress,
+    lastDashboardRawCacheAt: state.lastDashboardRawCacheAt,
+    lastDashboardRawCacheError: state.lastDashboardRawCacheError,
   };
 }
 
@@ -305,9 +361,13 @@ const server = http.createServer(async (request, response) => {
       const range = dashboardDateRange(options.period, options.date, options.startDate, options.endDate);
       const previous = dateOnly(addDays(new Date(`${range.startDate}T00:00:00+08:00`), -1));
       const monthStart = `${range.endDate.slice(0, 7)}-01`;
-      const rawRows = await dashboardSnapshots.readDailyRange([range.startDate, previous, monthStart].sort()[0], range.endDate);
+      const [rawRows, reference] = await Promise.all([
+        dashboardSnapshots.readDailyRange([range.startDate, previous, monthStart].sort()[0], range.endDate),
+        dashboardSnapshots.readReference(),
+      ]);
       const data = url.searchParams.get("refresh") === "1" ? null : await dashboardSnapshots.read(options);
-      const resolved = data || await dashboard.getDashboard({ ...options, rawRows });
+      if (!data && !reference) return json(response, 503, { error: "dashboard_cache_warming", message: "看板缓存正在准备，请稍后重试。" });
+      const resolved = data || await dashboard.getDashboard({ ...options, rawRows, referenceData: reference });
       // 员工端不返回全量多维表格入口，避免通过原始表绕过个人数据隔离。
       resolved.links = viewer.scope === "owner"
         ? { feishu: config.runtime.feishuBaseUrl, plan: resolved.meta.plansTableId ? `${config.runtime.feishuBaseUrl}?table=${resolved.meta.plansTableId}` : "", doubao: config.runtime.doubaoAiUrl }
@@ -336,6 +396,7 @@ const server = http.createServer(async (request, response) => {
     try {
       const body = await requestBody(request);
       const rules = await dashboard.saveRules(body.rules || {}, body.effectiveDate);
+      void refreshDashboardReferenceCache();
       return json(response, 200, { rules });
     } catch (error) {
       return json(response, 400, { error: "rule_save_failed", message: error.message });
@@ -365,8 +426,10 @@ if (config.runtime.schedulerEnabled) {
     // 服务重启后立即在后台生成首份真实快照；用户页面无需等待 ERP 请求。
     setTimeout(() => void refreshDashboardSnapshot(), 3000).unref();
     setTimeout(() => void refreshDashboardRawCache({ fullMonth: true }), 5000).unref();
+    setTimeout(() => void refreshDashboardReferenceCache(), 1000).unref();
     setInterval(() => void runOperationalSync(), 60 * 60000).unref();
     setInterval(() => void refreshDashboardSnapshot(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
+    setInterval(() => void refreshDashboardReferenceCache(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
     setInterval(() => {
       const china = new Intl.DateTimeFormat("en-CA", {
         timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23",
