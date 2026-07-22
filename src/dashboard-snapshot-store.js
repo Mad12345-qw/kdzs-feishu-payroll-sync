@@ -42,7 +42,7 @@ export class DashboardSnapshotStore {
     if (!result.rows.length) return null;
     const row = result.rows[0];
     const payload = row.payload;
-    if (!payload?.meta || !payload?.summary) return null;
+    if (!payload?.meta?.isOwner || !payload?.period?.startDate || !payload?.period?.endDate || typeof payload?.summary?.orderCount !== "number") return null;
     payload.meta.fromSnapshot = true;
     payload.meta.snapshotGeneratedAt = new Date(row.generated_at).toISOString();
     return payload;

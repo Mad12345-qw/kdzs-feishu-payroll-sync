@@ -310,7 +310,8 @@ if (config.runtime.schedulerEnabled) {
     // Render 重启可能发生在凌晨任务之后。启动时先补订单/售后/库存，再补商品、利润和工资草稿，
     // 保证当天数据不会因为服务重启而一直等到第二天凌晨。
     setTimeout(() => void runStartupSync(), 15000).unref();
-    setTimeout(() => void refreshDashboardSnapshot(), 25000).unref();
+    // 服务重启后立即在后台生成首份真实快照；用户页面无需等待 ERP 请求。
+    setTimeout(() => void refreshDashboardSnapshot(), 3000).unref();
     setInterval(() => void runOperationalSync(), 60 * 60000).unref();
     setInterval(() => void refreshDashboardSnapshot(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
     setInterval(() => {
