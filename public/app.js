@@ -4,6 +4,7 @@ const params = new URLSearchParams(location.search);
 const ownerAccess = params.get("access") || "";
 const storedViewerToken = sessionStorage.getItem("viewerToken") || "";
 const state = { data: null, view: params.get("view") || "owner", period: "today", store: "全部店铺", platform: "全部平台", basis: "placed", viewerToken: storedViewerToken };
+const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
 
 const currency = (value) => value == null ? "—" : `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const integer = (value, suffix = "") => `${Number(value || 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 })}${suffix}`;
@@ -21,21 +22,43 @@ function queryParams() {
   if (ownerAccess) query.set("access", ownerAccess);
   return query;
 }
+function browserCacheKey() {
+  const identity = ownerAccess ? "owner" : (state.viewerToken ? `employee-${state.viewerToken.slice(0, 20)}` : "anonymous");
+  const scopedStore = ownerAccess ? state.store : "personal-store";
+  return `kdzs-dashboard-v2:${identity}:${state.period}:${scopedStore}:${state.platform}:${state.basis}`;
+}
+function loadBrowserCache() {
+  try {
+    const cached = JSON.parse(localStorage.getItem(browserCacheKey()) || "null");
+    return cached?.data && Date.now() - cached.savedAt < DASHBOARD_CACHE_TTL ? cached.data : null;
+  } catch { return null; }
+}
+function saveBrowserCache(data) {
+  try { localStorage.setItem(browserCacheKey(), JSON.stringify({ savedAt: Date.now(), data })); } catch { /* storage unavailable */ }
+}
 function showLogin() { $("#login-gate").classList.remove("hidden"); $(".app-shell").classList.add("hidden"); if (window.lucide) window.lucide.createIcons(); }
 function hideLogin() { $("#login-gate").classList.add("hidden"); $(".app-shell").classList.remove("hidden"); }
 
-async function loadDashboard() {
+async function loadDashboard({ force = false } = {}) {
   if (!ownerAccess && !state.viewerToken) return showLogin();
-  $("#loading").classList.remove("hidden"); $("#error").classList.add("hidden"); $("#dashboard").classList.add("hidden");
+  const cached = force ? null : loadBrowserCache();
+  if (cached) {
+    state.data = cached; hideLogin(); render(cached);
+    $("#loading").classList.add("hidden"); $("#error").classList.add("hidden"); $("#dashboard").classList.remove("hidden");
+  } else {
+    $("#loading").classList.remove("hidden"); $("#error").classList.add("hidden"); $("#dashboard").classList.add("hidden");
+  }
   try {
-    const response = await fetch(`/api/dashboard?${queryParams()}`, { headers: authHeaders() });
+    const query = queryParams(); if (force) query.set("refresh", "1");
+    const response = await fetch(`/api/dashboard?${query}`, { headers: authHeaders() });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.message || payload.error || "读取失败");
-    state.data = payload; hideLogin(); render(payload);
+    state.data = payload; saveBrowserCache(payload); hideLogin(); render(payload);
     $("#loading").classList.add("hidden"); $("#dashboard").classList.remove("hidden");
   } catch (error) {
     $("#loading").classList.add("hidden");
     if (error.message.includes("unauthorized")) return showLogin();
+    if (cached) return;
     $("#error").classList.remove("hidden"); $("#error-message").textContent = error.message;
   }
 }
@@ -126,7 +149,7 @@ function switchView(view) {
 async function login() { const response = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: $("#login-account").value.trim(), pin: $("#login-pin").value.trim() }) }); const result = await response.json(); if (!response.ok) { $("#login-error").textContent = result.message || "登录失败"; return; } state.viewerToken = result.token; sessionStorage.setItem("viewerToken", result.token); await loadDashboard(); }
 
 $$('[data-view]').forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
-$("#refresh-btn").addEventListener("click", loadDashboard); $("#retry-btn").addEventListener("click", loadDashboard); $("#login-submit").addEventListener("click", login);
+$("#refresh-btn").addEventListener("click", () => loadDashboard({ force: true })); $("#retry-btn").addEventListener("click", () => loadDashboard({ force: true })); $("#login-submit").addEventListener("click", login);
 $("#custom-date-btn").addEventListener("click", () => $("#custom-date-popover").classList.toggle("hidden")); $("#custom-apply").addEventListener("click", () => { state.period = "custom"; $("#custom-date-popover").classList.add("hidden"); loadDashboard(); });
 $("#store-filter-btn").addEventListener("click", () => openFilter("store")); $("#platform-filter-btn").addEventListener("click", () => openFilter("platform")); $("#basis-filter-btn").addEventListener("click", () => openFilter("basis")); $$(".period-chip").forEach((button) => button.addEventListener("click", () => { state.period = button.dataset.period; loadDashboard(); }));
 $("#save-rules-btn").addEventListener("click", async () => { const rules = { "团队计提比例": Number($("#rule-team-rate").value) / 100, "单件团队封顶": Number($("#rule-cap").value), "主播分配比例": Number($("#rule-streamer-split").value) / 100, "中控分配比例": Number($("#rule-control-split").value) / 100, "助播分配比例": Number($("#rule-assistant-split").value) / 100 }; const response = await fetch("/api/rules", { method: "POST", headers: { ...authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ rules, effectiveDate: $("#rule-effective-date").value }) }); if (!response.ok) return alert("规则保存失败，请检查权限和比例合计。"); await loadDashboard(); });

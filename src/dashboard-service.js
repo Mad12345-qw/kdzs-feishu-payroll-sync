@@ -66,7 +66,7 @@ function dateRange(period, date, startDate, endDate) {
 }
 
 export class DashboardService {
-  constructor({ feishu, kdzs = null, getKdzs = null, cacheSeconds = 60, dashboardUrl = "", accessToken = "", logger = console }) {
+  constructor({ feishu, kdzs = null, getKdzs = null, cacheSeconds = 300, dashboardUrl = "", accessToken = "", logger = console }) {
     this.feishu = feishu;
     this.kdzs = kdzs;
     this.getKdzs = getKdzs;
@@ -76,6 +76,8 @@ export class DashboardService {
     this.logger = logger;
     this.tables = null;
     this.cache = new Map();
+    this.configuration = null;
+    this.configurationPromise = null;
   }
 
   async resolveTables() {
@@ -85,6 +87,16 @@ export class DashboardService {
   }
 
   async ensureConfiguration() {
+    if (this.configuration) return this.configuration;
+    if (!this.configurationPromise) {
+      this.configurationPromise = this.initializeConfiguration()
+        .then((configuration) => { this.configuration = configuration; return configuration; })
+        .finally(() => { this.configurationPromise = null; });
+    }
+    return this.configurationPromise;
+  }
+
+  async initializeConfiguration() {
     const tables = await this.resolveTables();
     const entry = await this.feishu.ensureTable(TABLE_NAMES.entry, [
       { field_name: "名称", type: 1 }, { field_name: "访问链接", type: 1 }, { field_name: "说明", type: 1 }, { field_name: "更新时间", type: 5 },

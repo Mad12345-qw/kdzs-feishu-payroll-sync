@@ -8,6 +8,7 @@ import { FeishuClient } from "./feishu-client.js";
 import { createDeliveryKdzsClient } from "./session-provider.js";
 import { DeliverySyncService } from "./delivery-sync.js";
 import { DashboardService } from "./dashboard-service.js";
+import { DashboardSnapshotStore } from "./dashboard-snapshot-store.js";
 import { addDays, dateOnly } from "./utils.js";
 
 const config = getConfig({ requireKdzs: false });
@@ -16,11 +17,12 @@ const sourceFeishu = config.feishu.sourceBaseToken
   ? new FeishuClient({ ...config.feishu, baseToken: config.feishu.sourceBaseToken }) : null;
 const dashboard = new DashboardService({
   feishu,
-  cacheSeconds: config.runtime.dashboardCacheSeconds,
+  cacheSeconds: Math.max(300, config.runtime.dashboardCacheSeconds),
   dashboardUrl: config.runtime.dashboardUrl,
   accessToken: config.runtime.dashboardAccessToken,
   getKdzs: () => createDeliveryKdzsClient({ feishu: sourceFeishu, config }),
 });
+const dashboardSnapshots = new DashboardSnapshotStore({ connectionString: config.runtime.databaseUrl });
 const publicDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../public");
 const state = {
   startedAt: new Date().toISOString(),
@@ -36,6 +38,9 @@ const state = {
   lastDailySyncError: null,
   operationalSyncRunning: false,
   dailySyncRunning: false,
+  dashboardSnapshotRunning: false,
+  lastDashboardSnapshotAt: null,
+  lastDashboardSnapshotError: null,
   erpStockTotal: null,
   baseTableCount: null,
 };
@@ -43,6 +48,28 @@ const state = {
 let syncRunning = false;
 let dailyRunning = false;
 let lastDailyDate = "";
+let dashboardSnapshotRunning = false;
+
+async function refreshDashboardSnapshot() {
+  if (dashboardSnapshotRunning) return false;
+  dashboardSnapshotRunning = true;
+  state.dashboardSnapshotRunning = true;
+  try {
+    const options = { period: "today", store: "全部店铺", platform: "全部平台", basis: "placed", viewer: { scope: "owner", name: "老板", role: "老板", store: "全部店铺" } };
+    const data = await dashboard.getDashboard(options);
+    await dashboardSnapshots.write(options, data);
+    state.lastDashboardSnapshotAt = new Date().toISOString();
+    state.lastDashboardSnapshotError = null;
+    return true;
+  } catch (error) {
+    state.lastDashboardSnapshotError = error.message;
+    console.error(error);
+    return false;
+  } finally {
+    dashboardSnapshotRunning = false;
+    state.dashboardSnapshotRunning = false;
+  }
+}
 
 async function runOperationalSync() {
   if (!config.runtime.syncEnabled || syncRunning || dailyRunning) return false;
@@ -139,6 +166,9 @@ function responseBody() {
     lastDailySyncError: state.lastDailySyncError,
     operationalSyncRunning: state.operationalSyncRunning,
     dailySyncRunning: state.dailySyncRunning,
+    dashboardSnapshotRunning: state.dashboardSnapshotRunning,
+    lastDashboardSnapshotAt: state.lastDashboardSnapshotAt,
+    lastDashboardSnapshotError: state.lastDashboardSnapshotError,
   };
 }
 
@@ -216,7 +246,7 @@ const server = http.createServer(async (request, response) => {
     const viewer = viewerFromRequest(request, url);
     if (!viewer) return json(response, 401, { error: "unauthorized" });
     try {
-      const data = await dashboard.getDashboard({
+      const options = {
         date: url.searchParams.get("date") || undefined,
         period: url.searchParams.get("period") || "today",
         startDate: url.searchParams.get("startDate") || undefined,
@@ -225,12 +255,14 @@ const server = http.createServer(async (request, response) => {
         platform: url.searchParams.get("platform") || "全部平台",
         basis: url.searchParams.get("basis") || "placed",
         viewer,
-      });
+      };
+      const data = url.searchParams.get("refresh") === "1" ? null : await dashboardSnapshots.read(options);
+      const resolved = data || await dashboard.getDashboard(options);
       // 员工端不返回全量多维表格入口，避免通过原始表绕过个人数据隔离。
-      data.links = viewer.scope === "owner"
-        ? { feishu: config.runtime.feishuBaseUrl, plan: data.meta.plansTableId ? `${config.runtime.feishuBaseUrl}?table=${data.meta.plansTableId}` : "", doubao: config.runtime.doubaoAiUrl }
+      resolved.links = viewer.scope === "owner"
+        ? { feishu: config.runtime.feishuBaseUrl, plan: resolved.meta.plansTableId ? `${config.runtime.feishuBaseUrl}?table=${resolved.meta.plansTableId}` : "", doubao: config.runtime.doubaoAiUrl }
         : { doubao: config.runtime.doubaoAiUrl };
-      return json(response, 200, data);
+      return json(response, 200, resolved);
     } catch (error) {
       console.error(error);
       return json(response, 500, { error: "dashboard_data_failed", message: error.message });
@@ -278,7 +310,9 @@ if (config.runtime.schedulerEnabled) {
     // Render 重启可能发生在凌晨任务之后。启动时先补订单/售后/库存，再补商品、利润和工资草稿，
     // 保证当天数据不会因为服务重启而一直等到第二天凌晨。
     setTimeout(() => void runStartupSync(), 15000).unref();
+    setTimeout(() => void refreshDashboardSnapshot(), 25000).unref();
     setInterval(() => void runOperationalSync(), 60 * 60000).unref();
+    setInterval(() => void refreshDashboardSnapshot(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
     setInterval(() => {
       const china = new Intl.DateTimeFormat("en-CA", {
         timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23",
