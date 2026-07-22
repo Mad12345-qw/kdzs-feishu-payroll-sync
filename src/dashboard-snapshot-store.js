@@ -31,7 +31,18 @@ export class DashboardSnapshotStore {
           generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           source_updated_at TIMESTAMPTZ
         )
-      `).then(() => { this.initialized = true; return true; }).finally(() => { this.initializing = null; });
+      `).then(() => this.pool.query(`
+        CREATE TABLE IF NOT EXISTS dashboard_daily_cache (
+          cache_date DATE NOT NULL,
+          time_basis SMALLINT NOT NULL,
+          orders JSONB NOT NULL DEFAULT '[]'::jsonb,
+          store_profits JSONB NOT NULL DEFAULT '[]'::jsonb,
+          product_profits JSONB NOT NULL DEFAULT '[]'::jsonb,
+          refunds JSONB NOT NULL DEFAULT '[]'::jsonb,
+          generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (cache_date, time_basis)
+        )
+      `)).then(() => { this.initialized = true; return true; }).finally(() => { this.initializing = null; });
     }
     return this.initializing;
   }
@@ -62,6 +73,28 @@ export class DashboardSnapshotStore {
     `, [key, JSON.stringify(payload), sourceUpdatedAt]);
     this.memory.set(key, { payload: structuredClone(payload), generatedAt: new Date().toISOString() });
     return true;
+  }
+
+  async writeDaily({ date, basis, orders = [], storeProfits = [], productProfits = [], refunds = [] }) {
+    if (!(await this.ensure())) return false;
+    await this.pool.query(`
+      INSERT INTO dashboard_daily_cache (cache_date, time_basis, orders, store_profits, product_profits, refunds, generated_at)
+      VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, NOW())
+      ON CONFLICT (cache_date, time_basis) DO UPDATE SET
+        orders = EXCLUDED.orders, store_profits = EXCLUDED.store_profits, product_profits = EXCLUDED.product_profits,
+        refunds = EXCLUDED.refunds, generated_at = EXCLUDED.generated_at
+    `, [date, basis, JSON.stringify(orders), JSON.stringify(storeProfits), JSON.stringify(productProfits), JSON.stringify(refunds)]);
+    return true;
+  }
+
+  async readDailyRange(startDate, endDate) {
+    if (!(await this.ensure())) return [];
+    const result = await this.pool.query(`
+      SELECT cache_date::text AS date, time_basis, orders, store_profits AS "storeProfits", product_profits AS "productProfits", refunds, generated_at
+      FROM dashboard_daily_cache WHERE cache_date >= $1::date AND cache_date <= $2::date
+      ORDER BY cache_date, time_basis
+    `, [startDate, endDate]);
+    return result.rows;
   }
 
   decorate(snapshot) {

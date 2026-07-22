@@ -7,7 +7,7 @@ import { getConfig } from "./config.js";
 import { FeishuClient } from "./feishu-client.js";
 import { createDeliveryKdzsClient } from "./session-provider.js";
 import { DeliverySyncService } from "./delivery-sync.js";
-import { DashboardService } from "./dashboard-service.js";
+import { DashboardService, dashboardDateRange } from "./dashboard-service.js";
 import { DashboardSnapshotStore } from "./dashboard-snapshot-store.js";
 import { addDays, dateOnly } from "./utils.js";
 
@@ -49,6 +49,50 @@ let syncRunning = false;
 let dailyRunning = false;
 let lastDailyDate = "";
 let dashboardSnapshotRunning = false;
+let dashboardRawCacheRunning = false;
+
+function chinaDay() {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const value = (type) => parts.find((part) => part.type === type)?.value;
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+function dateSeries(startDate, endDate) {
+  const dates = [];
+  for (let cursor = new Date(`${startDate}T00:00:00+08:00`); dateOnly(cursor) <= endDate; cursor = addDays(cursor, 1)) dates.push(dateOnly(cursor));
+  return dates;
+}
+
+async function cacheDashboardDay(client, day) {
+  const range = { startTime: `${day} 00:00:00`, endTime: `${day} 23:59:59` };
+  const [orders, refunds, placedStores, placedProducts, shippedStores, shippedProducts] = await Promise.all([
+    client.listAll("kdzs.erp.api.trade.list", { timeType: "CREATE_TIME", ...range }, 200),
+    client.listAll("kdzs.erp.api.refund.list", { createTimeStart: range.startTime, createTimeEnd: range.endTime }, 200),
+    client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 1, queryGroupType: 2, ...range }),
+    client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 1, queryGroupType: 8, ...range }),
+    client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 2, ...range }),
+    client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 8, ...range }),
+  ]);
+  await Promise.all([
+    dashboardSnapshots.writeDaily({ date: day, basis: 1, orders, refunds, storeProfits: placedStores, productProfits: placedProducts }),
+    dashboardSnapshots.writeDaily({ date: day, basis: 3, orders, refunds, storeProfits: shippedStores, productProfits: shippedProducts }),
+  ]);
+}
+
+async function refreshDashboardRawCache({ fullMonth = false } = {}) {
+  if (dashboardRawCacheRunning) return false;
+  dashboardRawCacheRunning = true;
+  try {
+    const today = chinaDay();
+    const start = fullMonth ? `${today.slice(0, 7)}-01` : dateOnly(addDays(new Date(`${today}T00:00:00+08:00`), -2));
+    const client = await createDeliveryKdzsClient({ feishu: sourceFeishu, config });
+    for (const day of dateSeries(start, today)) await cacheDashboardDay(client, day);
+    return true;
+  } catch (error) {
+    console.error(error);
+    return false;
+  } finally { dashboardRawCacheRunning = false; }
+}
 
 async function refreshDashboardSnapshot() {
   if (dashboardSnapshotRunning) return false;
@@ -87,6 +131,7 @@ async function runOperationalSync() {
     }
     state.lastSyncAt = new Date().toISOString();
     state.lastSyncError = null;
+    void refreshDashboardRawCache();
     return true;
   } catch (error) {
     state.lastSyncError = error.message;
@@ -257,13 +302,17 @@ const server = http.createServer(async (request, response) => {
         basis: url.searchParams.get("basis") || "placed",
         viewer,
       };
+      const range = dashboardDateRange(options.period, options.date, options.startDate, options.endDate);
+      const previous = dateOnly(addDays(new Date(`${range.startDate}T00:00:00+08:00`), -1));
+      const monthStart = `${range.endDate.slice(0, 7)}-01`;
+      const rawRows = await dashboardSnapshots.readDailyRange([range.startDate, previous, monthStart].sort()[0], range.endDate);
       const data = url.searchParams.get("refresh") === "1" ? null : await dashboardSnapshots.read(options);
-      const resolved = data || await dashboard.getDashboard(options);
+      const resolved = data || await dashboard.getDashboard({ ...options, rawRows });
       // 员工端不返回全量多维表格入口，避免通过原始表绕过个人数据隔离。
       resolved.links = viewer.scope === "owner"
         ? { feishu: config.runtime.feishuBaseUrl, plan: resolved.meta.plansTableId ? `${config.runtime.feishuBaseUrl}?table=${resolved.meta.plansTableId}` : "", doubao: config.runtime.doubaoAiUrl }
         : { doubao: config.runtime.doubaoAiUrl };
-      resolved.meta.responseSource = data ? "postgresql_snapshot" : "live_erp";
+      resolved.meta.responseSource = data ? "postgresql_snapshot" : "postgresql_daily_cache";
       resolved.meta.serverResponseMs = Number(process.hrtime.bigint() - requestStartedAt) / 1e6;
       return json(response, 200, resolved);
     } catch (error) {
@@ -315,6 +364,7 @@ if (config.runtime.schedulerEnabled) {
     setTimeout(() => void runStartupSync(), 15000).unref();
     // 服务重启后立即在后台生成首份真实快照；用户页面无需等待 ERP 请求。
     setTimeout(() => void refreshDashboardSnapshot(), 3000).unref();
+    setTimeout(() => void refreshDashboardRawCache({ fullMonth: true }), 5000).unref();
     setInterval(() => void runOperationalSync(), 60 * 60000).unref();
     setInterval(() => void refreshDashboardSnapshot(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
     setInterval(() => {
