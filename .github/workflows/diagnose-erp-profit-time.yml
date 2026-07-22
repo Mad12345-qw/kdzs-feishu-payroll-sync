@@ -1,0 +1,39 @@
+name: Diagnose ERP Profit Time Type
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Compare ERP time types for yesterday
+        env:
+          KDZS_APP_KEY: ${{ secrets.KDZS_APP_KEY }}
+          KDZS_APP_SECRET: ${{ secrets.KDZS_APP_SECRET }}
+          KDZS_SESSION: ${{ secrets.KDZS_SESSION }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { KdzsClient } from './src/kdzs-client.js';
+          const client = new KdzsClient({
+            appKey: process.env.KDZS_APP_KEY, appSecret: process.env.KDZS_APP_SECRET,
+            session: process.env.KDZS_SESSION, gateway: 'https://gw.kuaidizs.cn/open/api',
+            tokenUrl: 'http://gw.superboss.cc/api/token', requestTimeoutMs: 30000,
+          });
+          const now = new Date();
+          const yesterday = new Date(now.getTime() - 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+          for (const queryTimeType of [1, 2, 3, 4, 5, 6]) {
+            try {
+              const rows = await client.listAll('kdzs.erp.api.report.gross.profit', {
+                queryTimeType, queryGroupType: 2, startTime: `${yesterday} 00:00:00`, endTime: `${yesterday} 23:59:59`,
+              });
+              const sum = (key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
+              console.log(JSON.stringify({ queryTimeType, rows: rows.length, payment: sum('payment'), actualPayment: sum('actualPayment'), income: sum('income'), netSales: sum('netSales'), actualNumber: sum('actualNumber'), tidCount: sum('tidCount'), profit: sum('netSalesProfit') }));
+            } catch (error) { console.log(JSON.stringify({ queryTimeType, error: error.message })); }
+          }
+          NODE
