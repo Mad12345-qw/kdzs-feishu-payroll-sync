@@ -71,6 +71,50 @@ function dateSeries(startDate, endDate) {
   return dates;
 }
 
+// The dashboard never needs customer/order payloads. Keep only the fields required
+// for its totals and its exact per-unit commission cap calculation.
+function compactOrders(rows) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const key = `${row.sellerNick || ""}|${row.platform || ""}`;
+    const item = grouped.get(key) || { sellerNick: row.sellerNick, platform: row.platform, orderCount: 0, receivedPayment: 0 };
+    item.orderCount += 1;
+    item.receivedPayment += Number(row.receivedPayment ?? row.payment ?? 0) || 0;
+    grouped.set(key, item);
+  }
+  return [...grouped.values()];
+}
+
+function compactProducts(rows) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const quantity = Math.max(0, Number(row.number) || 0);
+    const profit = Number(row.netSalesProfit) || 0;
+    // Group only rows with the exact same unit profit. This preserves the per-item
+    // commission cap; grouping solely by SKU would change the result after cost changes.
+    const unitProfit = quantity ? profit / quantity : profit;
+    const key = [row.sellerNick, row.platform, row.itemTitle, row.skuId, unitProfit].map((value) => String(value ?? "")).join("|");
+    const item = grouped.get(key) || {
+      sellerNick: row.sellerNick, platform: row.platform, itemTitle: row.itemTitle, skuId: row.skuId,
+      number: 0, payment: 0, netSalesProfit: 0, actualCost: 0,
+    };
+    item.number += quantity;
+    item.payment += Number(row.payment) || 0;
+    item.netSalesProfit += profit;
+    item.actualCost += Number(row.actualCost ?? row.netSalesCost ?? row.costPrice ?? row.cost) || 0;
+    grouped.set(key, item);
+  }
+  return [...grouped.values()];
+}
+
+function compactRefunds(rows) {
+  return (rows || []).map((row) => ({
+    tid: row.tid, orderId: row.orderId, tradeId: row.tradeId, refundId: row.refundId, sellerNick: row.sellerNick,
+    reason: row.reason, refundReason: row.refundReason, remark: row.remark, refundStatus: row.refundStatus,
+    status: row.status, refundAmount: Number(row.refundAmount) || 0,
+  }));
+}
+
 async function cacheDashboardDay(client, day) {
   const range = { startTime: `${day} 00:00:00`, endTime: `${day} 23:59:59` };
   const [orders, refunds, placedStores, placedProducts, shippedStores, shippedProducts] = await Promise.all([
@@ -82,8 +126,8 @@ async function cacheDashboardDay(client, day) {
     client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 8, ...range }),
   ]);
   await Promise.all([
-    dashboardSnapshots.writeDaily({ date: day, basis: 1, orders, refunds, storeProfits: placedStores, productProfits: placedProducts }),
-    dashboardSnapshots.writeDaily({ date: day, basis: 3, orders, refunds, storeProfits: shippedStores, productProfits: shippedProducts }),
+    dashboardSnapshots.writeDaily({ date: day, basis: 1, orders: compactOrders(orders), refunds: compactRefunds(refunds), storeProfits: placedStores, productProfits: compactProducts(placedProducts) }),
+    dashboardSnapshots.writeDaily({ date: day, basis: 3, orders: compactOrders(orders), refunds: compactRefunds(refunds), storeProfits: shippedStores, productProfits: compactProducts(shippedProducts) }),
   ]);
 }
 

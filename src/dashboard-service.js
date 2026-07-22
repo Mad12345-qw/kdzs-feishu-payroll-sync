@@ -75,7 +75,7 @@ function cachedData(rows, startDate, endDate, basis, store, platform) {
   const flatten = (field) => entries.flatMap((row) => row[field] || []).filter((row) => inCachedScope(row, store, platform));
   const orders = flatten("orders");
   return {
-    orders: { orderCount: orders.length, sales: money(orders.reduce((total, row) => total + number(row.receivedPayment || row.payment), 0)), rows: orders },
+    orders: { orderCount: Math.round(orders.reduce((total, row) => total + number(row.orderCount ?? 1), 0)), sales: money(orders.reduce((total, row) => total + number(row.receivedPayment || row.payment), 0)), rows: orders },
     storeProfits: flatten("storeProfits"), productProfits: flatten("productProfits"), refunds: flatten("refunds"),
     complete: entries.length === Math.round((new Date(`${endDate}T00:00:00+08:00`).getTime() - new Date(`${startDate}T00:00:00+08:00`).getTime()) / 86400000) + 1,
   };
@@ -197,11 +197,10 @@ export class DashboardService {
   // bundle from PostgreSQL, so changing a page filter never has to wait for Feishu.
   async loadReferenceData() {
     const configuration = await this.ensureConfiguration();
-    const [peopleRecords, overviewRecords, stockRecords, deductionRecords, ruleRecords] = await Promise.all([
-      this.records(TABLE_NAMES.people), this.records(TABLE_NAMES.overview), this.records(TABLE_NAMES.stock),
-      this.records(TABLE_NAMES.deductions), this.records(TABLE_NAMES.rules),
+    const [peopleRecords, deductionRecords, ruleRecords] = await Promise.all([
+      this.records(TABLE_NAMES.people), this.records(TABLE_NAMES.deductions), this.records(TABLE_NAMES.rules),
     ]);
-    return { configuration, peopleRecords, overviewRecords, stockRecords, deductionRecords, ruleRecords, refreshedAt: new Date().toISOString() };
+    return { configuration, peopleRecords, deductionRecords, ruleRecords, refreshedAt: new Date().toISOString() };
   }
 
   async saveRules(input, effectiveDate = chinaDate()) {
@@ -312,8 +311,10 @@ export class DashboardService {
     const key = JSON.stringify({ ...range, store, platform, basis: safeBasis, viewer });
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.time < this.cacheMs) return cached.value;
-    const reference = referenceData || await this.loadReferenceData();
-    const { configuration, peopleRecords, overviewRecords, stockRecords, deductionRecords, ruleRecords } = reference;
+    // The legacy/direct path still supports the original Feishu summary fallback.
+    // Production dashboard requests pass referenceData from PostgreSQL and never read it.
+    const reference = referenceData || { ...(await this.loadReferenceData()), overviewRecords: await this.records(TABLE_NAMES.overview) };
+    const { configuration, peopleRecords = [], overviewRecords = [], deductionRecords = [], ruleRecords = [] } = reference;
     const people = peopleRecords.map((record) => record.fields || {});
     const isOwner = viewer.scope === "owner";
     const effectiveStore = isOwner ? store : viewer.store;
@@ -375,7 +376,10 @@ export class DashboardService {
     });
     const commissions = calculateCommissions(products, deductions, profitPending && safeBasis === "placed");
     const yesterdayProducts = this.calculateProducts(yesterdayProductRows, rules, people, previousDate, previousDate);
-    const yesterdayPending = Boolean(Math.round(sum(previousRows, "实发数量")) > 0 && yesterdayProductRowsLive && yesterdayProductRowsLive.length === 0);
+    const shippedCount = rawRows
+      ? Math.round((yesterdayProductRowsLive || []).reduce((total, row) => total + number(row.number), 0))
+      : Math.round(sum(previousRows, "实发数量"));
+    const yesterdayPending = Boolean(shippedCount > 0 && yesterdayProductRowsLive && yesterdayProductRowsLive.length === 0);
     const yesterdayCommissions = calculateCommissions(yesterdayProducts, yesterdayDeductions, yesterdayPending);
     const employeeProducts = products.filter((item) => isOwner || item.store === viewer.store).map((item) => {
       const role = viewer.role || "主播"; const members = people.filter((person) => scalar(person["所属店铺"]) === item.store && scalar(person["角色"] || "主播") === role && scalar(person["启用提成展示"]) !== "否").length || 1;
@@ -391,7 +395,7 @@ export class DashboardService {
     const summary = {
       orderCount: orders?.orderCount ?? fallbackOrders, sales: orders?.sales ?? sum(overview, "销售金额"),
       profit: profitPending ? null : profit, profitPending, refundAmount: money((refunds || []).reduce((total, row) => total + number(row.refundAmount), 0)), refundCount: refunds?.length ?? 0,
-      shippedCount: Math.round(sum(previousRows, "实发数量")), teamCommission: totalTeamCommission,
+      shippedCount, teamCommission: totalTeamCommission,
       monthProfit: monthProfitRowsLive ? monthProfit : null, monthTeamCommission: monthProductRowsLive ? money(monthProducts.reduce((total, item) => total + item.teamCommission, 0)) : null,
       monthAfterSalesLoss: monthRefundsLive ? money((monthRefundsLive || []).reduce((total, row) => total + number(row.refundAmount), 0)) : null,
       afterSalesLoss: money((refunds || []).reduce((total, row) => total + number(row.refundAmount), 0)), misShipmentLoss: money(deductions.filter((row) => scalar(row["类型"]).includes("错发")).reduce((total, row) => total + number(row["金额"]), 0)),
