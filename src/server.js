@@ -153,6 +153,8 @@ async function refreshDashboardRawCache({ fullMonth = false } = {}) {
     }
     state.lastDashboardRawCacheAt = new Date().toISOString();
     state.lastDashboardRawCacheError = null;
+    const retentionStart = dateOnly(addDays(new Date(`${today}T00:00:00+08:00`), -Math.max(31, config.runtime.dashboardCacheRetentionDays)));
+    await dashboardSnapshots.prune(retentionStart);
     void refreshDashboardRenderedSnapshots();
     return true;
   } catch (error) {

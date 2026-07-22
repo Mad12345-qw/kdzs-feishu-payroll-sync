@@ -104,6 +104,13 @@ export class DashboardSnapshotStore {
     return result.rows;
   }
 
+  async prune(beforeDate) {
+    if (!(await this.ensure())) return false;
+    await this.pool.query("DELETE FROM dashboard_daily_cache WHERE cache_date < $1::date", [beforeDate]);
+    await this.pool.query("DELETE FROM dashboard_snapshots WHERE generated_at < NOW() - INTERVAL '90 days'");
+    return true;
+  }
+
   async writeReference(payload) {
     if (!payload || !(await this.ensure())) return false;
     await this.pool.query(`
