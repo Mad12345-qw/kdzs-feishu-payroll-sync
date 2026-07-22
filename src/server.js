@@ -243,6 +243,7 @@ const server = http.createServer(async (request, response) => {
     return;
   }
   if (url.pathname === "/api/dashboard") {
+    const requestStartedAt = process.hrtime.bigint();
     const viewer = viewerFromRequest(request, url);
     if (!viewer) return json(response, 401, { error: "unauthorized" });
     try {
@@ -262,6 +263,8 @@ const server = http.createServer(async (request, response) => {
       resolved.links = viewer.scope === "owner"
         ? { feishu: config.runtime.feishuBaseUrl, plan: resolved.meta.plansTableId ? `${config.runtime.feishuBaseUrl}?table=${resolved.meta.plansTableId}` : "", doubao: config.runtime.doubaoAiUrl }
         : { doubao: config.runtime.doubaoAiUrl };
+      resolved.meta.responseSource = data ? "postgresql_snapshot" : "live_erp";
+      resolved.meta.serverResponseMs = Number(process.hrtime.bigint() - requestStartedAt) / 1e6;
       return json(response, 200, resolved);
     } catch (error) {
       console.error(error);
