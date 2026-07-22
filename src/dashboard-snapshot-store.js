@@ -9,6 +9,7 @@ export class DashboardSnapshotStore {
     this.pool = pool;
     this.initialized = false;
     this.initializing = null;
+    this.memory = new Map();
   }
 
   enabled() { return Boolean(this.pool || this.connectionString); }
@@ -38,14 +39,15 @@ export class DashboardSnapshotStore {
   async read(options) {
     const key = this.keyFor(options);
     if (!key || !(await this.ensure())) return null;
+    if (this.memory.has(key)) return this.decorate(this.memory.get(key));
     const result = await this.pool.query("SELECT payload, generated_at FROM dashboard_snapshots WHERE snapshot_key = $1", [key]);
     if (!result.rows.length) return null;
     const row = result.rows[0];
     const payload = row.payload;
     if (!payload?.meta?.isOwner || !payload?.period?.startDate || !payload?.period?.endDate || typeof payload?.summary?.orderCount !== "number") return null;
-    payload.meta.fromSnapshot = true;
-    payload.meta.snapshotGeneratedAt = new Date(row.generated_at).toISOString();
-    return payload;
+    const snapshot = { payload, generatedAt: new Date(row.generated_at).toISOString() };
+    this.memory.set(key, snapshot);
+    return this.decorate(snapshot);
   }
 
   async write(options, payload) {
@@ -58,7 +60,15 @@ export class DashboardSnapshotStore {
       ON CONFLICT (snapshot_key) DO UPDATE
       SET payload = EXCLUDED.payload, generated_at = EXCLUDED.generated_at, source_updated_at = EXCLUDED.source_updated_at
     `, [key, JSON.stringify(payload), sourceUpdatedAt]);
+    this.memory.set(key, { payload: structuredClone(payload), generatedAt: new Date().toISOString() });
     return true;
+  }
+
+  decorate(snapshot) {
+    const payload = structuredClone(snapshot.payload);
+    payload.meta.fromSnapshot = true;
+    payload.meta.snapshotGeneratedAt = snapshot.generatedAt;
+    return payload;
   }
 
   async close() { if (this.pool) await this.pool.end(); }
