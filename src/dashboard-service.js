@@ -52,7 +52,7 @@ export function dashboardDateRange(period, date, startDate, endDate) {
   if (period === "week") {
     const selectedDate = new Date(`${selected}T00:00:00+08:00`);
     const monday = new Date(selectedDate.getTime() - ((selectedDate.getDay() + 6) % 7) * 86400000);
-    return { startDate: parseDate(monday), endDate: selected, label: "本周" };
+    return { startDate: dateOnly(monday), endDate: selected, label: "本周" };
   }
   if (period === "month") return { startDate: `${selected.slice(0, 7)}-01`, endDate: selected, label: "本月" };
   if (period === "last_month") {
