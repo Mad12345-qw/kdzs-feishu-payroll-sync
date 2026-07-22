@@ -58,6 +58,7 @@ let lastDailyDate = "";
 let dashboardSnapshotRunning = false;
 let dashboardRawCacheRunning = false;
 let dashboardReferenceRunning = false;
+let dashboardRenderedSnapshotsRunning = false;
 
 function chinaDay() {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
@@ -137,7 +138,11 @@ async function refreshDashboardRawCache({ fullMonth = false } = {}) {
   state.dashboardRawCacheRunning = true;
   try {
     const today = chinaDay();
-    const start = fullMonth ? `${today.slice(0, 7)}-01` : dateOnly(addDays(new Date(`${today}T00:00:00+08:00`), -2));
+    // Retain last month as well: the page offers "上月" and custom ranges must not fall
+    // back to ERP when the calendar changes on the first day of a month.
+    const start = fullMonth
+      ? dateOnly(new Date(`${today.slice(0, 7)}-01T00:00:00+08:00`).setDate(0))
+      : dateOnly(addDays(new Date(`${today}T00:00:00+08:00`), -2));
     const client = await createDeliveryKdzsClient({ feishu: sourceFeishu, config });
     const dates = dateSeries(start, today);
     state.dashboardRawCacheProgress = { completedDays: 0, totalDays: dates.length, currentDate: dates[0] || null };
@@ -148,7 +153,7 @@ async function refreshDashboardRawCache({ fullMonth = false } = {}) {
     }
     state.lastDashboardRawCacheAt = new Date().toISOString();
     state.lastDashboardRawCacheError = null;
-    void refreshDashboardSnapshot();
+    void refreshDashboardRenderedSnapshots();
     return true;
   } catch (error) {
     state.lastDashboardRawCacheError = error.message;
@@ -184,6 +189,55 @@ async function refreshDashboardSnapshot() {
     return false;
   } finally {
     dashboardSnapshotRunning = false;
+    state.dashboardSnapshotRunning = false;
+  }
+}
+
+async function refreshDashboardRenderedSnapshots() {
+  if (dashboardRenderedSnapshotsRunning) return false;
+  dashboardRenderedSnapshotsRunning = true;
+  state.dashboardSnapshotRunning = true;
+  try {
+    const today = chinaDay();
+    const [rawRows, reference] = await Promise.all([
+      dashboardSnapshots.readDailyRange(`${today.slice(0, 7)}-01`, today),
+      dashboardSnapshots.readReference(),
+    ]);
+    if (!reference || !rawRows.length) return false;
+    const allStore = "全部店铺";
+    const allPlatform = "全部平台";
+    const stores = [allStore, ...new Set([
+      ...(reference.peopleRecords || []).map((record) => record.fields?.["所属店铺"]),
+      ...rawRows.flatMap((row) => (row.storeProfits || []).map((item) => item.sellerNick)),
+    ].filter(Boolean))];
+    const platforms = [allPlatform, ...new Set(rawRows.flatMap((row) => [
+      ...(row.storeProfits || []).map((item) => item.platform),
+      ...(row.productProfits || []).map((item) => item.platform),
+    ]).filter(Boolean))];
+    const viewers = [
+      { scope: "owner", name: "老板", role: "老板", store: allStore },
+      ...(reference.peopleRecords || []).map((record) => record.fields || {})
+        .filter((person) => person["启用提成展示"] !== "否")
+        .map((person) => ({ scope: "employee", name: person["姓名"], role: person["角色"] || "主播", store: person["所属店铺"] }))
+        .filter((viewer) => viewer.name && viewer.store),
+    ];
+    for (const viewer of viewers) {
+      const scopedStores = viewer.scope === "owner" ? stores : [viewer.store];
+      for (const period of ["today", "yesterday", "week", "month"]) for (const store of scopedStores) for (const platform of platforms) for (const basis of ["placed", "shipped", "monthly"]) {
+        const options = { period, store, platform, basis, viewer };
+        const result = await dashboard.getDashboard({ ...options, rawRows, referenceData: reference });
+        await dashboardSnapshots.write(options, result);
+      }
+    }
+    state.lastDashboardSnapshotAt = new Date().toISOString();
+    state.lastDashboardSnapshotError = null;
+    return true;
+  } catch (error) {
+    state.lastDashboardSnapshotError = error.message;
+    console.error(error);
+    return false;
+  } finally {
+    dashboardRenderedSnapshotsRunning = false;
     state.dashboardSnapshotRunning = false;
   }
 }
@@ -402,16 +456,19 @@ const server = http.createServer(async (request, response) => {
         basis: url.searchParams.get("basis") || "placed",
         viewer,
       };
-      const range = dashboardDateRange(options.period, options.date, options.startDate, options.endDate);
-      const previous = dateOnly(addDays(new Date(`${range.startDate}T00:00:00+08:00`), -1));
-      const monthStart = `${range.endDate.slice(0, 7)}-01`;
-      const [rawRows, reference] = await Promise.all([
-        dashboardSnapshots.readDailyRange([range.startDate, previous, monthStart].sort()[0], range.endDate),
-        dashboardSnapshots.readReference(),
-      ]);
       const data = url.searchParams.get("refresh") === "1" ? null : await dashboardSnapshots.read(options);
-      if (!data && !reference) return json(response, 503, { error: "dashboard_cache_warming", message: "看板缓存正在准备，请稍后重试。" });
-      const resolved = data || await dashboard.getDashboard({ ...options, rawRows, referenceData: reference });
+      let resolved = data;
+      if (!resolved) {
+        const range = dashboardDateRange(options.period, options.date, options.startDate, options.endDate);
+        const previous = dateOnly(addDays(new Date(`${range.startDate}T00:00:00+08:00`), -1));
+        const monthStart = `${range.endDate.slice(0, 7)}-01`;
+        const [rawRows, reference] = await Promise.all([
+          dashboardSnapshots.readDailyRange([range.startDate, previous, monthStart].sort()[0], range.endDate),
+          dashboardSnapshots.readReference(),
+        ]);
+        if (!reference) return json(response, 503, { error: "dashboard_cache_warming", message: "看板缓存正在准备，请稍后重试。" });
+        resolved = await dashboard.getDashboard({ ...options, rawRows, referenceData: reference });
+      }
       // 员工端不返回全量多维表格入口，避免通过原始表绕过个人数据隔离。
       resolved.links = viewer.scope === "owner"
         ? { feishu: config.runtime.feishuBaseUrl, plan: resolved.meta.plansTableId ? `${config.runtime.feishuBaseUrl}?table=${resolved.meta.plansTableId}` : "", doubao: config.runtime.doubaoAiUrl }
@@ -468,11 +525,11 @@ if (config.runtime.schedulerEnabled) {
     // 保证当天数据不会因为服务重启而一直等到第二天凌晨。
     setTimeout(() => void runStartupSync(), 15000).unref();
     // 服务重启后立即在后台生成首份真实快照；用户页面无需等待 ERP 请求。
-    setTimeout(() => void refreshDashboardSnapshot(), 3000).unref();
+    setTimeout(() => void refreshDashboardRenderedSnapshots(), 3000).unref();
     setTimeout(() => void refreshDashboardRawCache({ fullMonth: true }), 5000).unref();
     setTimeout(() => void refreshDashboardReferenceCache(), 1000).unref();
     setInterval(() => void runOperationalSync(), 60 * 60000).unref();
-    setInterval(() => void refreshDashboardSnapshot(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
+    setInterval(() => void refreshDashboardRenderedSnapshots(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
     setInterval(() => void refreshDashboardReferenceCache(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
     setInterval(() => {
       const china = new Intl.DateTimeFormat("en-CA", {

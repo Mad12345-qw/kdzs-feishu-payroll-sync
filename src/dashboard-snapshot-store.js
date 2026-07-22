@@ -15,8 +15,9 @@ export class DashboardSnapshotStore {
   enabled() { return Boolean(this.pool || this.connectionString); }
 
   keyFor({ period = "today", store = "全部店铺", platform = "全部平台", basis = "placed", viewer = {} } = {}) {
-    if (viewer.scope !== "owner" || period !== "today" || store !== "全部店铺" || platform !== "全部平台" || basis !== "placed") return "";
-    return "owner:today:all-stores:all-platforms:placed";
+    if (!viewer?.scope || !["owner", "employee"].includes(viewer.scope)) return "";
+    const identity = viewer.scope === "owner" ? "owner" : `employee:${encodeURIComponent(viewer.name || "")}:${encodeURIComponent(viewer.role || "")}:${encodeURIComponent(viewer.store || "")}`;
+    return `dashboard:v2:${identity}:${encodeURIComponent(period)}:${encodeURIComponent(store)}:${encodeURIComponent(platform)}:${encodeURIComponent(basis)}`;
   }
 
   async ensure() {
@@ -61,7 +62,7 @@ export class DashboardSnapshotStore {
     if (!result.rows.length) return null;
     const row = result.rows[0];
     const payload = row.payload;
-    if (!payload?.meta?.isOwner || !payload?.period?.startDate || !payload?.period?.endDate || typeof payload?.summary?.orderCount !== "number") return null;
+    if (!payload?.meta || !payload?.period?.startDate || !payload?.period?.endDate || typeof payload?.summary?.orderCount !== "number") return null;
     const snapshot = { payload, generatedAt: new Date(row.generated_at).toISOString() };
     this.memory.set(key, snapshot);
     return this.decorate(snapshot);
