@@ -45,6 +45,9 @@ async function loadDashboard({ force = false } = {}) {
   if (cached) {
     state.data = cached; hideLogin(); render(cached);
     $("#loading").classList.add("hidden"); $("#error").classList.add("hidden"); $("#dashboard").classList.remove("hidden");
+    // Keep repeated page opens within the cache window local. The refresh button
+    // remains available whenever the user needs the latest ERP snapshot.
+    return;
   } else {
     $("#loading").classList.remove("hidden"); $("#error").classList.add("hidden"); $("#dashboard").classList.add("hidden");
   }

@@ -551,7 +551,11 @@ if (config.runtime.schedulerEnabled) {
     setTimeout(() => void runStartupSync(), 15000).unref();
     // 服务重启后立即在后台生成首份真实快照；用户页面无需等待 ERP 请求。
     setTimeout(() => void refreshDashboardRenderedSnapshots(), 3000).unref();
-    setTimeout(() => void refreshDashboardRawCache({ fullMonth: true }), 5000).unref();
+    // A free web instance can be restarted frequently. Rebuilding two calendar
+    // months on every restart repeatedly downloads the same ERP reports and can
+    // exhaust the hosting account's transfer allowance. Normal startup only
+    // refreshes the recent reconciliation window; historical backfill is manual.
+    setTimeout(() => void refreshDashboardRawCache(), 5000).unref();
     setTimeout(() => void refreshDashboardReferenceCache(), 1000).unref();
     setInterval(() => void runOperationalSync(), 60 * 60000).unref();
     setInterval(() => void refreshDashboardRenderedSnapshots(), Math.max(2, config.runtime.dashboardSnapshotRefreshMinutes) * 60000).unref();
