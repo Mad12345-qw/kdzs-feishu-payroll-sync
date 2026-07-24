@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DashboardService } from "../src/dashboard-service.js";
+import { DashboardService, dashboardBasisForRange, isEffectivePaidTrade } from "../src/dashboard-service.js";
 
 function fakeFeishu() {
   const tables = [
@@ -14,13 +14,14 @@ function fakeFeishu() {
     ],
     people: [{ fields: { "姓名": "主播A", "角色": "主播", "所属店铺": "测试店", "提成百分比": 0.03, "下单提成比例": 0.03, "发货提成比例": 0.02, "月结提成比例": 0.01, "启用提成展示": "是" } }],
     stock: [],
-    products: [{ fields: { "日期": Date.parse("2026-07-20T00:00:00+08:00"), "商品名称": "商品A", "销售金额": 600, "销售数量": 6, "利润": 120 } }],
+    products: [{ fields: { "日期": Date.parse("2026-07-20T00:00:00+08:00"), "店铺名称": "测试店", "平台类型": "抖音", "商品名称": "商品A", "销售金额": 600, "销售数量": 6, "利润": 120 } }],
     deductions: [{ fields: { "日期": Date.parse("2026-07-20T00:00:00+08:00"), "姓名": "主播A", "角色": "主播", "店铺": "测试店", "类型": "错发", "金额": 1, "说明": "错发一件" } }],
   };
   return {
     listTables: async () => tables,
     ensureField: async () => ({}),
     batchUpdateSafe: async () => ({ succeeded: [], failures: [] }),
+    batchCreateSafe: async () => ({ succeeded: [], failures: [] }),
     ensureTable: async (name) => {
       if (!tables.find((table) => table.name === name)) tables.push({ name, table_id: "deductions" });
       return tables.find((table) => table.name === name);
@@ -29,23 +30,207 @@ function fakeFeishu() {
   };
 }
 
-test("经营看板只用 ERP 利润乘人员表比例，并扣除明细表金额", async () => {
+test("经营看板按每件 ERP 利润计算团队提成，并只扣责任人个人金额", async () => {
   const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
   const dashboard = await service.getDashboard({ date: "2026-07-20", store: "测试店", platform: "抖音", basis: "placed" });
   assert.equal(dashboard.summary.sales, 1000);
   assert.equal(dashboard.summary.profit, 200);
   assert.equal(dashboard.summary.shippedCount, 7);
   assert.equal(dashboard.summary.misShipmentLoss, 1);
-  assert.equal(dashboard.commissions[0].grossCommission, 6);
-  assert.equal(dashboard.commissions[0].commission, 5);
+  assert.equal(dashboard.commissions[0].grossCommission, 14.4);
+  assert.equal(dashboard.commissions[0].commission, 13.4);
 });
 
-test("三种提成口径分别使用当日、昨日和整月 ERP 利润", async () => {
+test("日期决定自动核算口径，客户端参数不能把历史日期切回下单口径", async () => {
   const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
   const placed = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "placed" });
   const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
   const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
-  assert.equal(placed.commissions[0].grossCommission, 6);
-  assert.equal(shipped.commissions[0].grossCommission, 3.2);
-  assert.equal(monthly.commissions[0].grossCommission, 3.6);
+  assert.equal(placed.meta.basis, "shipped");
+  assert.equal(shipped.meta.basis, "shipped");
+  assert.equal(monthly.meta.basis, "shipped");
+  assert.equal(placed.commissions[0].grossCommission, 14.4);
+  assert.equal(shipped.commissions[0].grossCommission, 14.4);
+  assert.equal(monthly.commissions[0].grossCommission, 14.4);
+});
+
+test("历史日期只请求 ERP 发货时间口径", async () => {
+  const calls = [];
+  const kdzs = { listAll: async (method, params) => {
+    calls.push({ method, params });
+    if (method === "kdzs.erp.api.trade.list") return [];
+    if (params.queryGroupType === 8) return [{ sellerNick: "测试店", platform: "抖音", itemTitle: "商品A", skuId: "sku", number: 1, payment: 100, netSalesProfit: params.queryTimeType === 1 ? 500 : 300 }];
+    return [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: params.queryTimeType === 1 ? 500 : 300 }];
+  } };
+  const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
+  const placed = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "placed" });
+  const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
+  const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
+  const profitTypes = calls.filter((item) => item.method === "kdzs.erp.api.report.gross.profit").map((item) => item.params.queryTimeType);
+  assert.equal(profitTypes.every((type) => type === 3), true);
+  assert.equal(placed.commissions[0].grossCommission, 3);
+  assert.equal(placed.summary.profit, 300);
+  assert.equal(shipped.commissions[0].grossCommission, 3);
+  assert.equal(monthly.commissions[0].grossCommission, 3);
+});
+
+test("当天订单已同步但 ERP 毛利未生成时，不把利润和提成显示为零", async () => {
+  const kdzs = { listAll: async (method) => method === "kdzs.erp.api.trade.list"
+    ? [{ sellerNick: "测试店", platform: "抖音", payment: 120, receivedPayment: 120 }]
+    : [] };
+  const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  const today = `${part("year")}-${part("month")}-${part("day")}`;
+  const dashboard = await service.getDashboard({ date: today, store: "测试店", basis: "placed" });
+  assert.equal(dashboard.summary.orderCount, 1);
+  assert.equal(dashboard.summary.sales, 120);
+  assert.equal(dashboard.summary.profitPending, true);
+  assert.equal(dashboard.summary.profit, null);
+  assert.equal(dashboard.commissions[0].commission, null);
+});
+
+test("历史缓存采用实发金额，不把直播间未发货下单额计入昨天销售", async () => {
+  const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
+  const referenceData = { configuration: {}, peopleRecords: [], overviewRecords: [], deductionRecords: [], ruleRecords: [] };
+  const rawRows = [
+    { date: "2026-07-20", time_basis: 1, orders: [{ sellerNick: "测试店", platform: "抖音", orderCount: 300, receivedPayment: 30000 }], storeProfits: [], productProfits: [], refunds: [] },
+    { date: "2026-07-20", time_basis: 3, orders: [{ sellerNick: "测试店", platform: "抖音", orderCount: 160, receivedPayment: 16000 }], storeProfits: [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: 3200 }], productProfits: [{ sellerNick: "测试店", platform: "抖音", itemTitle: "实发商品", skuId: "sku", actualNumber: 160, actualPayment: 16000, netSalesProfit: 3200 }], refunds: [] },
+  ];
+  const dashboard = await service.getDashboard({ date: "2026-07-20", store: "测试店", platform: "抖音", basis: "placed", rawRows, referenceData });
+  assert.equal(dashboard.meta.basis, "shipped");
+  assert.equal(dashboard.summary.sales, 16000);
+  assert.equal(dashboard.summary.orderCount, 160);
+  assert.equal(dashboard.summary.profit, 3200);
+});
+
+test("跨今天的周期今天按下单、历史按发货", () => {
+  assert.equal(dashboardBasisForRange({ startDate: "2026-07-20", endDate: "2026-07-20" }, "2026-07-21"), "shipped");
+  assert.equal(dashboardBasisForRange({ startDate: "2026-07-21", endDate: "2026-07-21" }, "2026-07-21"), "placed");
+  assert.equal(dashboardBasisForRange({ startDate: "2026-07-20", endDate: "2026-07-21" }, "2026-07-21"), "mixed");
+});
+
+test("有效成交订单仅保留已付款、非关闭、非测试且非全额退款订单", () => {
+  assert.equal(isEffectivePaidTrade({ payment: 100, status: "已付款" }), true);
+  assert.equal(isEffectivePaidTrade({ payment: 0, status: "未付款" }), false);
+  assert.equal(isEffectivePaidTrade({ payment: 100, status: "交易关闭" }), false);
+  assert.equal(isEffectivePaidTrade({ payment: 100, source: "测试订单" }), false);
+  assert.equal(isEffectivePaidTrade({ payment: 100, refundAmount: 100 }), false);
+  assert.equal(isEffectivePaidTrade({ payment: 100, refundAmount: 20 }), true);
+});
+
+test("当天成交统计按付款时间查询并过滤无效订单", async () => {
+  const calls = [];
+  const client = { listAll: async (method, params) => {
+    calls.push({ method, params });
+    return [
+      { sellerNick: "测试店", platform: "抖音", payment: 100, receivedPayment: 100, status: "已付款" },
+      { sellerNick: "测试店", platform: "抖音", payment: 80, receivedPayment: 0, status: "未付款" },
+      { sellerNick: "测试店", platform: "抖音", payment: 60, receivedPayment: 60, status: "交易关闭" },
+      { sellerNick: "测试店", platform: "抖音", payment: 40, receivedPayment: 40, refundAmount: 40, status: "已退款" },
+    ];
+  } };
+  const service = new DashboardService({ feishu: fakeFeishu() });
+  const summary = await service.queryOrders(client, "2026-07-23", "2026-07-23", "测试店", "抖音");
+  assert.equal(calls[0].params.timeType, "PAY_TIME");
+  assert.equal(summary.orderCount, 1);
+  assert.equal(summary.sales, 100);
+});
+
+test("提成回退和责任罚金分别展示并按固定公式抵扣", async () => {
+  const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  const today = `${part("year")}-${part("month")}-${part("day")}`;
+  const referenceData = {
+    configuration: {}, overviewRecords: [], ruleRecords: [],
+    peopleRecords: [{ fields: { "姓名": "主播A", "角色": "主播", "所属店铺": "测试店", "启用提成展示": "是" } }],
+    deductionRecords: [
+      { fields: { "日期": Date.parse(`${today}T00:00:00+08:00`), "姓名": "主播A", "店铺": "测试店", "扣款类型": "提成回退", "订单编号": "T-100", "原成交日期": Date.parse("2026-06-20T00:00:00+08:00"), "金额": 2, "说明": "订单售后退货，调减过往提成" } },
+      { fields: { "日期": Date.parse(`${today}T00:00:00+08:00`), "姓名": "主播A", "店铺": "测试店", "扣款类型": "责任罚金", "订单编号": "T-101", "原成交日期": Date.parse("2026-06-21T00:00:00+08:00"), "金额": 1, "处罚原因": "配货错误" } },
+    ],
+  };
+  const rawRows = [
+    { date: today, time_basis: 2, orders: [{ sellerNick: "测试店", platform: "抖音", orderCount: 1, receivedPayment: 100 }], storeProfits: [], productProfits: [], refunds: [] },
+    { date: today, time_basis: 3, orders: [], storeProfits: [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: 100 }], productProfits: [{ sellerNick: "测试店", platform: "抖音", itemTitle: "商品A", skuId: "sku", number: 1, actualNumber: 0, payment: 100, netSalesProfit: 100 }], refunds: [] },
+  ];
+  const dashboard = await service.getDashboard({ date: today, store: "测试店", viewer: { scope: "employee", name: "主播A", role: "主播", store: "测试店" }, rawRows, referenceData });
+  assert.equal(dashboard.commissions[0].currentAccruedCommission, 3);
+  assert.equal(dashboard.commissions[0].commissionReversal, 2);
+  assert.equal(dashboard.commissions[0].responsibilityPenalty, 1);
+  assert.equal(dashboard.commissions[0].commission, 0);
+  assert.deepEqual(dashboard.deductions.map((item) => item.category), ["reversal", "penalty"]);
+  assert.equal(dashboard.deductions[0].orderNo, "T-100");
+  assert.equal(dashboard.deductions[1].note, "配货错误");
+});
+
+test("昨日实发提成和本月经营汇总分别按独立日期范围读取", async () => {
+  const kdzs = { listAll: async (method, params = {}) => {
+    if (method === "kdzs.erp.api.trade.list" || method === "kdzs.erp.api.refund.list") return [];
+    const day = String(params.startTime || "").slice(0, 10);
+    const profit = day === "2026-07-19" ? 50 : day === "2026-07-01" ? 500 : 100;
+    if (params.queryGroupType === 8) return [{ sellerNick: "测试店", platform: "抖音", itemTitle: "商品A", skuId: day, number: 1, payment: profit, netSalesProfit: profit }];
+    return [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: profit }];
+  } };
+  const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
+  const owner = await service.getDashboard({ date: "2026-07-20", store: "测试店", viewer: { scope: "owner", name: "老板", role: "老板", store: "全部店铺" } });
+  const employee = await service.getDashboard({ date: "2026-07-20", store: "测试店", viewer: { scope: "employee", name: "主播A", role: "主播", store: "测试店" } });
+  assert.equal(owner.summary.monthProfit, 500);
+  assert.equal(owner.summary.monthTeamCommission, 5);
+  assert.equal(employee.summary.yesterdayShippedCommission, 3);
+});
+
+test("单品团队提成先封顶再按 60/25/15 分配，亏损不产生提成", () => {
+  const service = new DashboardService({ feishu: fakeFeishu() });
+  const people = [
+    { "姓名": "主播", "所属店铺": "测试店", "角色": "主播", "启用提成展示": "是" },
+    { "姓名": "中控", "所属店铺": "测试店", "角色": "中控", "启用提成展示": "是" },
+    { "姓名": "助播", "所属店铺": "测试店", "角色": "助播", "启用提成展示": "是" },
+  ];
+  const rules = { "团队计提比例": 0.2, "单件团队封顶": 5, "主播分配比例": 0.6, "中控分配比例": 0.25, "助播分配比例": 0.15 };
+  const [capped, loss] = service.calculateProducts([
+    { sellerNick: "测试店", platform: "抖音", itemTitle: "高利润商品", skuId: "1", number: 1, payment: 100, netSalesProfit: 100 },
+    { sellerNick: "测试店", platform: "抖音", itemTitle: "亏损商品", skuId: "2", number: 1, payment: 20, netSalesProfit: -1 },
+  ], rules, people, "2026-07-20", "2026-07-20");
+  assert.equal(capped.teamCommission, 5);
+  assert.deepEqual(capped.roleCommission, { "主播": 3, "中控": 1.25, "助播": 0.75 });
+  assert.equal(loss.teamCommission, 0);
+});
+
+test("单件封顶按每个订单商品数量累计，不把全天销量只封顶一次", () => {
+  const service = new DashboardService({ feishu: fakeFeishu() });
+  const rules = { "团队计提比例": 0.2, "单件团队封顶": 5, "主播分配比例": 0.6, "中控分配比例": 0.25, "助播分配比例": 0.15 };
+  const [item] = service.calculateProducts([
+    { sellerNick: "测试店", platform: "抖音", itemTitle: "千件商品", skuId: "1000", number: 1000, payment: 100000, netSalesProfit: 100000 },
+  ], rules, [], "2026-07-20", "2026-07-20");
+  assert.equal(item.teamCommission, 5000);
+  assert.deepEqual(item.roleCommission, { "主播": 3000, "中控": 1250, "助播": 750 });
+});
+
+test("员工接口只返回本人店铺和个人提成，不泄露利润、团队提成或全库入口数据", async () => {
+  const kdzs = { listAll: async (method, params) => {
+    if (method === "kdzs.erp.api.trade.list") return [
+      { sellerNick: "测试店", platform: "抖音", payment: 100, receivedPayment: 100 },
+      { sellerNick: "其他店", platform: "抖音", payment: 200, receivedPayment: 200 },
+    ];
+    if (method === "kdzs.erp.api.refund.list") return [];
+    if (params.queryGroupType === 8) return [
+      { sellerNick: "测试店", platform: "抖音", itemTitle: "商品A", skuId: "sku-a", number: 1, payment: 100, netSalesProfit: 100 },
+      { sellerNick: "其他店", platform: "抖音", itemTitle: "商品B", skuId: "sku-b", number: 1, payment: 200, netSalesProfit: 200 },
+    ];
+    return [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: 100 }, { sellerNick: "其他店", platform: "抖音", netSalesProfit: 200 }];
+  } };
+  const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
+  const dashboard = await service.getDashboard({ date: "2026-07-20", store: "其他店", viewer: { scope: "employee", name: "主播A", role: "主播", store: "测试店" } });
+  assert.deepEqual(dashboard.filters.stores, ["测试店"]);
+  assert.equal(dashboard.commissions.length, 1);
+  assert.equal(dashboard.commissions[0].name, "主播A");
+  assert.equal(Object.hasOwn(dashboard.summary, "profit"), false);
+  assert.equal(dashboard.rules, null);
+  assert.equal(dashboard.team.length, 0);
+  assert.equal(dashboard.products.length, 1);
+  assert.equal(dashboard.products[0].name, "商品A");
+  assert.equal(Object.hasOwn(dashboard.products[0], "profit"), false);
+  assert.equal(Object.hasOwn(dashboard.products[0], "teamCommission"), false);
+  assert.equal(Object.hasOwn(dashboard.products[0], "roleCommission"), false);
 });

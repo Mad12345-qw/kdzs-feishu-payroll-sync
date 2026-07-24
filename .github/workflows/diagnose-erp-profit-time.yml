@@ -1,0 +1,41 @@
+name: Diagnose ERP Profit Time Type
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Compare ERP time types for yesterday
+        env:
+          FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+          FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          ERP_SOURCE_BASE_TOKEN: ${{ secrets.ERP_SOURCE_BASE_TOKEN }}
+          FEISHU_SESSION_TABLE_ID: ${{ secrets.FEISHU_SESSION_TABLE_ID }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { FeishuClient } from './src/feishu-client.js';
+          import { createDeliveryKdzsClient } from './src/session-provider.js';
+          const feishu = new FeishuClient({ appId: process.env.FEISHU_APP_ID, appSecret: process.env.FEISHU_APP_SECRET, baseToken: process.env.ERP_SOURCE_BASE_TOKEN, baseUrl: 'https://open.feishu.cn/open-apis', requestTimeoutMs: 30000 });
+          const client = await createDeliveryKdzsClient({ feishu, config: {
+            runtime: { sessionTableId: process.env.FEISHU_SESSION_TABLE_ID },
+            kdzs: { appKey: '', appSecret: '', session: '', gateway: 'https://gw.kuaidizs.cn/open/api', tokenUrl: 'http://gw.superboss.cc/api/token', requestTimeoutMs: 30000 },
+          } });
+          const now = new Date();
+          const yesterday = new Date(now.getTime() - 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+          for (const queryTimeType of [1, 2, 3, 4, 5, 6]) {
+            try {
+              const rows = await client.listAll('kdzs.erp.api.report.gross.profit', {
+                queryTimeType, queryGroupType: 2, startTime: `${yesterday} 00:00:00`, endTime: `${yesterday} 23:59:59`,
+              });
+              const sum = (key) => rows.reduce((total, row) => total + (Number(row[key]) || 0), 0);
+              console.log(JSON.stringify({ queryTimeType, rows: rows.length, payment: sum('payment'), actualPayment: sum('actualPayment'), income: sum('income'), netSales: sum('netSales'), actualNumber: sum('actualNumber'), tidCount: sum('tidCount'), profit: sum('netSalesProfit') }));
+            } catch (error) { console.log(JSON.stringify({ queryTimeType, error: error.message })); }
+          }
+          NODE

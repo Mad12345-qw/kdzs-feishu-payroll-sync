@@ -1,115 +1,164 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
+const params = new URLSearchParams(location.search);
+const ownerAccess = params.get("access") || "";
+const storedViewerToken = sessionStorage.getItem("viewerToken") || "";
+const state = { data: null, view: params.get("view") || "owner", period: "today", store: "全部店铺", platform: "全部平台", viewerToken: storedViewerToken };
+const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
 
-const initialParams = new URLSearchParams(location.search);
-const initialView = ["owner", "streamer", "control", "collab"].includes(initialParams.get("view")) ? initialParams.get("view") : "owner";
-const state = { data: null, view: initialView, access: initialParams.get("access") || sessionStorage.getItem("dashboardAccess") || "" };
-if (state.access) sessionStorage.setItem("dashboardAccess", state.access);
-
-const currency = (value) => `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const currency = (value) => value == null ? "—" : `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const integer = (value, suffix = "") => `${Number(value || 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 })}${suffix}`;
-const percent = (value) => `${(Number(value || 0) * 100).toFixed(2).replace(/\.00$/, "")}%`;
-const emptyRow = (columns, label = "当前筛选条件下暂无数据") => `<tr class="empty-row"><td colspan="${columns}">${label}</td></tr>`;
+const moneyOrPending = (value, pending) => pending ? "待生成" : currency(value);
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[char]));
+const emptyRow = (columns, label = "当前筛选条件下暂无数据") => `<tr class="empty-row"><td colspan="${columns}">${label}</td></tr>`;
 
-function setOptions(element, values, current, allLabel) {
-  const options = allLabel ? [allLabel, ...values] : values;
-  element.innerHTML = options.map((value) => `<option value="${escapeHtml(value)}" ${value === current ? "selected" : ""}>${escapeHtml(value)}</option>`).join("");
+function authHeaders() {
+  if (ownerAccess) return { "x-dashboard-access": ownerAccess };
+  return state.viewerToken ? { Authorization: `Bearer ${state.viewerToken}` } : {};
 }
-
-function currentFilters() {
-  return {
-    date: $("#date-filter").value,
-    store: $("#store-filter").value || "全部店铺",
-    platform: $("#platform-filter").value || "全部平台",
-    basis: $("#basis-filter").value || "placed",
-    role: $("#role-filter").value || "全部角色",
-  };
+function queryParams() {
+  const query = new URLSearchParams({ period: state.period, store: state.store, platform: state.platform });
+  if (state.period === "custom") { query.set("startDate", $("#custom-start").value); query.set("endDate", $("#custom-end").value); }
+  if (ownerAccess) query.set("access", ownerAccess);
+  return query;
 }
-
-async function loadDashboard(preserveFilters = true) {
-  $("#loading").classList.remove("hidden"); $("#error").classList.add("hidden"); $("#dashboard").classList.add("hidden");
-  const old = preserveFilters && state.data ? currentFilters() : {};
-  const params = new URLSearchParams(Object.fromEntries(Object.entries(old).filter(([, value]) => value)));
-  if (state.access) params.set("access", state.access);
+function browserCacheKey() {
+  const identity = ownerAccess ? "owner" : (state.viewerToken ? `employee-${state.viewerToken.slice(0, 20)}` : "anonymous");
+  const scopedStore = ownerAccess ? state.store : "personal-store";
+  return `kdzs-dashboard-v4:${identity}:${state.period}:${scopedStore}:${state.platform}`;
+}
+function loadBrowserCache() {
   try {
-    const response = await fetch(`/api/dashboard?${params}`, { headers: state.access ? { "x-dashboard-access": state.access } : {} });
+    const cached = JSON.parse(localStorage.getItem(browserCacheKey()) || "null");
+    return cached?.data && Date.now() - cached.savedAt < DASHBOARD_CACHE_TTL ? cached.data : null;
+  } catch { return null; }
+}
+function saveBrowserCache(data) {
+  try { localStorage.setItem(browserCacheKey(), JSON.stringify({ savedAt: Date.now(), data })); } catch { /* storage unavailable */ }
+}
+function showLogin() { $("#login-gate").classList.remove("hidden"); $(".app-shell").classList.add("hidden"); if (window.lucide) window.lucide.createIcons(); }
+function hideLogin() { $("#login-gate").classList.add("hidden"); $(".app-shell").classList.remove("hidden"); }
+
+async function loadDashboard({ force = false } = {}) {
+  if (!ownerAccess && !state.viewerToken) return showLogin();
+  const cached = force ? null : loadBrowserCache();
+  if (cached) {
+    state.data = cached; hideLogin(); render(cached);
+    $("#loading").classList.add("hidden"); $("#error").classList.add("hidden"); $("#dashboard").classList.remove("hidden");
+  } else {
+    $("#loading").classList.remove("hidden"); $("#error").classList.add("hidden"); $("#dashboard").classList.add("hidden");
+  }
+  try {
+    const query = queryParams(); if (force) query.set("refresh", "1");
+    const response = await fetch(`/api/dashboard?${query}`, { headers: authHeaders() });
     const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error === "unauthorized" ? "访问链接缺少授权码，请使用飞书中的正式入口。" : (payload.message || payload.error || "读取失败"));
-    state.data = payload;
-    render(payload, old);
+    if (!response.ok) throw new Error(payload.message || payload.error || "读取失败");
+    state.data = payload; saveBrowserCache(payload); hideLogin(); render(payload);
     $("#loading").classList.add("hidden"); $("#dashboard").classList.remove("hidden");
   } catch (error) {
-    $("#loading").classList.add("hidden"); $("#error").classList.remove("hidden"); $("#error-message").textContent = error.message;
+    $("#loading").classList.add("hidden");
+    if (error.message.includes("unauthorized")) return showLogin();
+    if (cached) return;
+    $("#error").classList.remove("hidden"); $("#error-message").textContent = error.message;
   }
 }
 
-function render(data, previous = {}) {
-  const { meta, filters, summary, commissions, team, deductions, products, reminders } = data;
-  setOptions($("#date-filter"), filters.dates, meta.selectedDate);
-  setOptions($("#store-filter"), filters.stores, previous.store || "全部店铺", "全部店铺");
-  setOptions($("#platform-filter"), filters.platforms, previous.platform || "全部平台", "全部平台");
-  setOptions($("#role-filter"), filters.roles, previous.role || "全部角色", "全部角色");
-  $("#basis-filter").value = meta.basis;
-  $("#data-note").textContent = meta.note;
-  $("#data-date").textContent = `数据日期 ${meta.selectedDate}`;
-  $("#sync-label").textContent = `最新数据 ${meta.latestDataDate || "待同步"}`;
+function renderQuickFilters(data) {
+  $("#store-filter-btn").innerHTML = `${escapeHtml(state.store)} <i data-lucide="chevron-down"></i>`;
+  $("#platform-filter-btn").innerHTML = `${escapeHtml(state.platform)} <i data-lucide="chevron-down"></i>`;
+  $("#basis-filter-btn").textContent = data.meta.basisLabel;
+  $$(".period-chip").forEach((button) => button.classList.toggle("active", button.dataset.period === state.period));
+  if (window.lucide) window.lucide.createIcons();
+}
+function openFilter(kind) {
+  const popover = $("#filter-popover"); const values = kind === "store" ? ["全部店铺", ...(state.data?.filters?.stores || [])] : ["全部平台", ...(state.data?.filters?.platforms || [])];
+  popover.innerHTML = values.map((value) => { const key = Array.isArray(value) ? value[0] : value; const label = Array.isArray(value) ? value[1] : value; return `<button data-filter-kind="${kind}" data-filter-value="${escapeHtml(key)}">${escapeHtml(label)}</button>`; }).join("");
+  popover.classList.remove("hidden");
+  $$("[data-filter-kind]").forEach((button) => button.addEventListener("click", () => { const value = button.dataset.filterValue; if (kind === "store") state.store = value; if (kind === "platform") state.platform = value; popover.classList.add("hidden"); renderQuickFilters(state.data); loadDashboard(); }));
+}
+
+function renderRules(data) {
+  const panel = $("#owner-rules-panel");
+  if (!data.meta.isOwner || !data.rules) return panel.classList.add("hidden");
+  panel.classList.remove("hidden");
+  $("#rule-team-rate").value = Number(data.rules["团队计提比例"] || 0) * 100;
+  $("#rule-cap").value = data.rules["单件团队封顶"] || 0;
+  $("#rule-streamer-split").value = Number(data.rules["主播分配比例"] || 0) * 100;
+  $("#rule-control-split").value = Number(data.rules["中控分配比例"] || 0) * 100;
+  $("#rule-assistant-split").value = Number(data.rules["助播分配比例"] || 0) * 100;
+  $("#rule-effective-date").value = data.period.endDate;
+}
+
+function render(data) {
+  const { meta, summary, commissions = [], team = [], deductions = [], operationalExceptions = [], products = [], reminders = [], viewer } = data;
+  $("#welcome-line").textContent = `${escapeHtml(viewer?.name || "老板")}，欢迎你`;
+  $("#data-note").textContent = meta.source;
+  $("#data-date").textContent = `${data.period.label} ${data.period.startDate} 至 ${data.period.endDate}`;
   $("#basis-label").textContent = meta.basisLabel;
-  $("#owner-sales").textContent = currency(summary.sales);
-  $("#owner-profit").textContent = currency(summary.profit);
-  $("#owner-refund").textContent = currency(summary.refundAmount);
-  $("#owner-loss").textContent = currency(summary.misShipmentLoss);
-  $("#month-profit").textContent = currency(summary.monthProfit);
-  $("#owner-commission-body").innerHTML = commissions.length ? commissions.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.store)}</td><td>${percent(item.rate)}</td><td class="money">${currency(item.commission)}</td></tr>`).join("") : emptyRow(5, "人员表中暂无符合条件的员工");
+  renderQuickFilters(data); renderRules(data);
+  const isOwner = Boolean(meta.isOwner);
+  const employeeView = viewer?.role === "中控" ? "control" : "streamer";
+  $$("[data-view]").forEach((element) => {
+    const view = element.dataset.view;
+    element.classList.toggle("hidden", !isOwner && view !== employeeView && view !== "collab");
+  });
+  $(".mobile-nav").style.gridTemplateColumns = isOwner ? "repeat(4, 1fr)" : "repeat(2, 1fr)";
+  $("#collab-data-panel").classList.toggle("hidden", !isOwner);
+  $("#feishu-link").classList.toggle("hidden", !isOwner || !data.links?.feishu);
+  $("#collab-feishu").classList.toggle("hidden", !isOwner || !data.links?.feishu);
+  if (!isOwner) {
+    state.store = viewer.store;
+    $("#store-filter-btn").classList.add("hidden");
+  } else {
+    $("#store-filter-btn").classList.remove("hidden");
+  }
+  $("#owner-sales").textContent = currency(summary.sales); $("#owner-profit").textContent = moneyOrPending(summary.profit, summary.profitPending);
+  $("#owner-refund").textContent = currency(summary.refundAmount); $("#owner-loss").textContent = currency(summary.misShipmentLoss); $("#month-profit").textContent = moneyOrPending(summary.monthProfit, summary.monthProfit == null);
+  $("#month-team-commission").textContent = moneyOrPending(summary.monthTeamCommission, summary.monthTeamCommission == null); $("#month-after-sales").textContent = moneyOrPending(summary.monthAfterSalesLoss, summary.monthAfterSalesLoss == null);
+  $("#owner-commission-body").innerHTML = commissions.length ? commissions.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${escapeHtml(item.role)}</td><td>${escapeHtml(item.store)}</td><td>${isOwner ? moneyOrPending(item.grossCommission, item.pending) : ""}</td><td class="money">${moneyOrPending(item.commission, item.pending)}</td></tr>`).join("") : emptyRow(5, "暂无人员配置");
+  $("#owner-product-body").innerHTML = products.length ? products.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${escapeHtml(item.store)}</td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td>${currency(item.cost)}</td><td class="money">${currency(item.profit)}</td><td class="money">${currency(item.teamCommission)}</td><td>${currency(item.roleCommission?.主播)}</td><td>${currency(item.roleCommission?.中控)}</td><td>${currency(item.roleCommission?.助播)}</td></tr>`).join("") : emptyRow(10, summary.profitPending ? "ERP 毛利报表生成后自动展示商品提成" : "暂无商品利润明细");
+  $("#owner-exception-body").innerHTML = isOwner && operationalExceptions.length ? operationalExceptions.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.orderNo)}</td><td>${escapeHtml(item.store || "—")}</td><td>${escapeHtml(item.name || "—")}</td><td>${escapeHtml(item.reason || "—")}</td><td>${escapeHtml(item.status || "—")}</td><td class="money">${currency(item.amount)}</td></tr>`).join("") : emptyRow(7, "当前筛选期间暂无售后或错发明细");
   $("#reminder-list").innerHTML = reminders.map((item) => `<div class="reminder">${escapeHtml(item)}</div>`).join("");
 
   const mine = commissions[0];
-  $("#stream-orders").textContent = integer(summary.orderCount, " 单");
-  $("#stream-sales").textContent = currency(summary.sales);
-  $("#stream-commission").textContent = currency(mine?.commission || summary.teamCommission);
-  $("#stream-rate").textContent = mine ? `${mine.name} · ${percent(mine.rate)}` : "请选择店铺或配置人员";
-  $("#stream-shipped").textContent = integer(summary.shippedCount, " 件");
-  const productRows = products.length ? products.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td class="money">${currency(item.profit)}</td></tr>`).join("") : emptyRow(4);
-  $("#stream-product-body").innerHTML = productRows;
-  $("#stream-income").innerHTML = mine ? `<span>${escapeHtml(mine.name)} · ${escapeHtml(mine.store)}</span><strong>${currency(mine.commission)}</strong><small>ERP 利润 ${currency(mine.profit)} × ${percent(mine.rate)} − 扣款 ${currency(mine.deduction)}</small>` : `<span>团队预计提成</span><strong>${currency(summary.teamCommission)}</strong><small>选择具体店铺后可查看个人数据</small>`;
-  renderDetails($("#stream-deductions"), deductions, "当前没有扣款记录");
-
-  $("#control-orders").textContent = integer(summary.orderCount, " 单");
-  $("#control-shipped").textContent = integer(summary.shippedCount, " 件");
-  $("#control-refunds").textContent = integer(summary.refundCount, " 单");
-  $("#control-commission").textContent = currency(summary.teamCommission);
-  $("#team-cards").innerHTML = team.length ? team.map((item) => `<div class="team-card"><span>${escapeHtml(item.role)} · ${item.members} 人</span><strong>${currency(item.commission)}</strong></div>`).join("") : `<div class="team-card"><span>暂无角色配置</span><strong>—</strong></div>`;
-  renderDetails($("#control-deductions"), deductions, "当前没有待处理扣款或异常");
-
-  $("#collab-product-body").innerHTML = products.length ? products.map((item, index) => `<tr><td>${index + 1}</td><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td>${item.stock == null ? "ERP未关联" : integer(item.stock, " 件")}</td><td class="money">${currency(item.profit)}</td><td><span class="pill">已同步</span></td></tr>`).join("") : emptyRow(7);
-
-  const feishuUrl = data.links?.feishu || "https://dcnx0esypql0.feishu.cn/base/SgoybTSbCa1G25s81rbcsBcxnJd";
-  const doubaoUrl = data.links?.doubao || "https://www.doubao.com/";
-  ["#feishu-link", "#collab-feishu"].forEach((id) => $(id).href = feishuUrl);
-  ["#doubao-link", "#owner-doubao", "#collab-doubao", "#collab-ai"].forEach((id) => $(id).href = doubaoUrl);
+  $("#stream-orders").textContent = integer(summary.orderCount, " 单"); $("#stream-sales").textContent = currency(summary.sales); $("#stream-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending); $("#stream-rate").textContent = summary.profitPending ? "等待ERP揽收/商品利润生成" : "今日个人预估"; $("#stream-yesterday-commission").textContent = moneyOrPending(summary.yesterdayShippedCommission, summary.yesterdayShippedPending); $("#stream-shipped").textContent = `昨日 ERP 实发 ${integer(summary.shippedCount, " 件")}`;
+  $("#stream-product-body").innerHTML = products.length ? products.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td class="money">${moneyOrPending(item.personalCommission, summary.profitPending)}</td></tr>`).join("") : emptyRow(4, summary.profitPending ? "等待 ERP 单品利润生成" : "暂无今日商品数据");
+  $("#stream-income").innerHTML = mine ? `<span>${escapeHtml(mine.name)} · ${escapeHtml(mine.store)}</span><strong class="income-earned">${moneyOrPending(mine.commission, mine.pending)}</strong><small>最终实发 = 计提 − 回退 − 损耗分摊 − 责任罚金</small>` : `<span>本人预估提成</span><strong>待配置</strong><small>请在人员表配置登录账号与 PIN</small>`;
+  renderDetails($("#stream-deductions"), deductions, "当前没有本人扣款");
+  $("#stream-accrued-commission").textContent = moneyOrPending(mine?.currentAccruedCommission, mine?.pending);
+  $("#stream-commission-reversal").textContent = currency(mine?.commissionReversal || 0);
+  $("#stream-after-sales-loss-share").textContent = currency(mine?.afterSalesLossShare || 0);
+  $("#stream-responsibility-penalty").textContent = currency(mine?.responsibilityPenalty || 0);
+  $("#stream-final-commission").textContent = moneyOrPending(mine?.commission, mine?.pending);
+  $("#stream-adjustment-body").innerHTML = deductions.length ? deductions.map((item) => `<tr class="adjustment-row ${escapeHtml(item.category)}"><td>${escapeHtml(item.orderNo || "—")}</td><td>${escapeHtml(item.transactionDate || "—")}</td><td><span class="adjustment-kind ${escapeHtml(item.category)}">${escapeHtml(item.type)}</span></td><td class="adjustment-money">-${currency(item.amount)}</td><td><strong>${escapeHtml(item.note)}</strong><small class="adjustment-trace">揽收：${escapeHtml(item.pickupTime || "—")} ｜ 客服备注：${escapeHtml(item.customerServiceRemark || "—")} ｜ 判定：${escapeHtml(item.responsibilityType || "—")}${item.responsibilityRole ? `（${escapeHtml(item.responsibilityRole)}）` : ""}</small></td></tr>`).join("") : emptyRow(5, "本期没有提成回退、损耗分摊或责任罚金");
+  $("#control-orders").textContent = integer(summary.orderCount, " 单"); $("#control-shipped").textContent = integer(summary.shippedCount, " 件"); $("#control-refunds").textContent = integer(summary.refundCount, " 单"); $("#control-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending); renderDetails($("#control-deductions"), deductions, "当前没有本人扣款");
+  $("#control-exception-body").innerHTML = operationalExceptions.length ? operationalExceptions.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.orderNo)}</td><td>${escapeHtml(item.store || "—")}</td><td>${escapeHtml(item.reason || "—")}</td><td>${escapeHtml(item.status || "—")}</td></tr>`).join("") : emptyRow(5, "当前筛选期间暂无店铺异常");
+  $("#team-cards").innerHTML = mine ? `<div class="team-card"><span>${escapeHtml(mine.name)} · ${escapeHtml(mine.role)}</span><strong>${moneyOrPending(mine.commission, mine.pending)}</strong></div>` : `<div class="team-card"><span>本人账号未配置</span><strong>—</strong></div>`;
+  $("#collab-product-body").innerHTML = products.length ? products.map((item, index) => `<tr><td>${index + 1}</td><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td>${meta.isOwner ? currency(item.profit) : "—"}</td><td>${meta.isOwner ? currency(item.teamCommission) : moneyOrPending(item.personalCommission, summary.profitPending)}</td><td><span class="pill">已同步</span></td></tr>`).join("") : emptyRow(7);
+  const feishuUrl = data.links?.feishu || ""; const planUrl = data.links?.plan || ""; const doubaoUrl = data.links?.doubao || "https://www.doubao.com/";
+  if (feishuUrl) ["#feishu-link", "#collab-feishu"].forEach((id) => $(id).href = feishuUrl); ["#doubao-link", "#owner-doubao", "#collab-doubao", "#collab-ai"].forEach((id) => $(id).href = doubaoUrl);
+  $("#collab-plan").classList.toggle("hidden", !isOwner || !planUrl); if (planUrl) $("#collab-plan").href = planUrl;
+  if (!isOwner) { switchView(employeeView); $("#owner-rules-panel").classList.add("hidden"); }
   if (window.lucide) window.lucide.createIcons();
 }
 
-function renderDetails(container, rows, emptyText) {
-  container.innerHTML = rows.length ? rows.map((item) => `<div class="detail-item"><strong>${escapeHtml(item.type)} · ${escapeHtml(item.name || item.store)}</strong><b>-${currency(item.amount)}</b><small>${escapeHtml(item.note || item.date || "已登记")}</small><small>${escapeHtml(item.status)}</small></div>`).join("") : `<div class="detail-item"><strong>${escapeHtml(emptyText)}</strong><small>扣款数据需在飞书“18_提成扣款明细”登记</small></div>`;
+function renderDetails(container, rows, emptyText) { container.innerHTML = rows.length ? rows.map((item) => `<div class="detail-item ${escapeHtml(item.category)}"><strong>${escapeHtml(item.type)}${item.name ? ` · ${escapeHtml(item.name)}` : ""}</strong><b>-${currency(item.amount)}</b><small>${escapeHtml(item.orderNo || item.note || item.date || "已登记")}</small><small>${escapeHtml(item.status)}</small></div>`).join("") : `<div class="detail-item"><strong>${escapeHtml(emptyText)}</strong><small>在飞书“18_提成扣款明细”登记订单编号、原成交日期和扣款类型</small></div>`; }
+const viewTitles = { owner: ["经营数据一眼看完", "老板经营总览"], streamer: ["只看本人订单与提成", "主播工作台"], control: ["只看本人订单、售后与提成", "中控工作台"], collab: ["一份数据，三人协作", "直播协同工作台"] };
+function switchView(view) {
+  const viewer = state.data?.viewer;
+  if (state.data && !state.data.meta?.isOwner) {
+    const employeeView = viewer?.role === "中控" ? "control" : "streamer";
+    if (view !== employeeView && view !== "collab") view = employeeView;
+  }
+  state.view = view; $$(".view").forEach((element) => element.classList.toggle("active", element.id === `view-${view}`)); $$('[data-view]').forEach((element) => element.classList.toggle("active", element.dataset.view === view)); $("#page-eyebrow").textContent = viewTitles[view][0]; $("#page-title").textContent = viewTitles[view][1];
 }
 
-const viewTitles = {
-  owner: ["经营数据一眼看完", "老板经营总览"], streamer: ["成交、发货、提成直观展示", "主播工作台"],
-  control: ["订单、售后与团队提成", "中控工作台"], collab: ["一份数据，三人协作", "直播协同工作台"],
-};
-function switchView(view) {
-  state.view = view;
-  $$(".view").forEach((element) => element.classList.toggle("active", element.id === `view-${view}`));
-  $$('[data-view]').forEach((element) => element.classList.toggle("active", element.dataset.view === view));
-  $("#page-eyebrow").textContent = viewTitles[view][0]; $("#page-title").textContent = viewTitles[view][1];
-  scrollTo({ top: 0, behavior: "smooth" });
-}
+async function login() { const response = await fetch("/api/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ account: $("#login-account").value.trim(), pin: $("#login-pin").value.trim() }) }); const result = await response.json(); if (!response.ok) { $("#login-error").textContent = result.message || "登录失败"; return; } state.viewerToken = result.token; sessionStorage.setItem("viewerToken", result.token); await loadDashboard(); }
 
 $$('[data-view]').forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
-[$("#date-filter"), $("#store-filter"), $("#platform-filter"), $("#basis-filter"), $("#role-filter")].forEach((element) => element.addEventListener("change", () => loadDashboard(true)));
-$("#refresh-btn").addEventListener("click", () => loadDashboard(true));
-$("#retry-btn").addEventListener("click", () => loadDashboard(true));
-switchView(state.view);
-if (window.lucide) window.lucide.createIcons();
-loadDashboard(false);
+$("#refresh-btn").addEventListener("click", () => loadDashboard({ force: true })); $("#retry-btn").addEventListener("click", () => loadDashboard({ force: true })); $("#login-submit").addEventListener("click", login);
+$("#custom-date-btn").addEventListener("click", () => $("#custom-date-popover").classList.toggle("hidden")); $("#custom-apply").addEventListener("click", () => { state.period = "custom"; $("#custom-date-popover").classList.add("hidden"); loadDashboard(); });
+$("#store-filter-btn").addEventListener("click", () => openFilter("store")); $("#platform-filter-btn").addEventListener("click", () => openFilter("platform")); $$(".period-chip").forEach((button) => button.addEventListener("click", () => { state.period = button.dataset.period; loadDashboard(); }));
+$("#save-rules-btn").addEventListener("click", async () => { const rules = { "团队计提比例": Number($("#rule-team-rate").value) / 100, "单件团队封顶": Number($("#rule-cap").value), "主播分配比例": Number($("#rule-streamer-split").value) / 100, "中控分配比例": Number($("#rule-control-split").value) / 100, "助播分配比例": Number($("#rule-assistant-split").value) / 100 }; const response = await fetch("/api/rules", { method: "POST", headers: { ...authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ rules, effectiveDate: $("#rule-effective-date").value }) }); if (!response.ok) return alert("规则保存失败，请检查权限和比例合计。"); await loadDashboard(); });
+$$(".copy-prompt").forEach((button) => button.addEventListener("click", async () => { try { await navigator.clipboard.writeText(button.dataset.prompt || ""); button.textContent = "已复制，去豆包粘贴"; setTimeout(() => { button.textContent = "复制提示词"; }, 1800); } catch { alert("复制失败，请手动复制提示词。"); } }));
+if (window.lucide) window.lucide.createIcons(); loadDashboard();

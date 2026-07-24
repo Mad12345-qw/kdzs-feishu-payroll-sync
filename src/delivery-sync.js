@@ -1,4 +1,5 @@
 import { addDays, dateChunks, dateOnly, endOfDayString, monthBounds, number, parseLocalDate, previousMonth, roundMoney, startOfDayString, text, uniqueBy } from "./utils.js";
+import { DashboardService } from "./dashboard-service.js";
 
 // 客户交付库：只使用 Bvsz 内已有的业务表。LJB0 仅由 session-provider 读取 ERP 会话。
 export const DELIVERY_TABLES = {
@@ -28,6 +29,23 @@ function monthOf(day) { return day.slice(0, 7); }
 function halfOf(day) { return Number(day.slice(8, 10)) <= 14 ? "01-14" : "15-end"; }
 function partitionName(prefix, day) { return `${prefix}_${monthOf(day)}_${halfOf(day)}`; }
 function money(value) { return roundMoney(number(value)); }
+function customerServiceRemark(refund = {}) {
+  return text(refund.customerServiceRemark || refund.csRemark || refund.serviceRemark || refund.sellerMemo || refund.sellerRemark || refund.remark || refund.memo || refund.refundRemark || refund.refundReason);
+}
+export function classifyAfterSalesResponsibility(remark) {
+  const value = text(remark).replace(/\s+/g, "");
+  if (/客户个人原因|无责任方|不喜欢|不想要|七天无理由|无理由/.test(value)) return { type: "客户个人原因", role: "", mode: "无责任方" };
+  if (/发错货|漏发货|发错|漏发|货不对版|配货错误|责任[:：]?中控/.test(value)) return { type: "发错漏发", role: "中控", mode: "自动关键词匹配" };
+  if (/使用讲解不清|不会使用|操作不清|责任[:：]?助播/.test(value)) return { type: "使用讲解不清", role: "助播", mode: "自动关键词匹配" };
+  if (/讲解夸大|夸大宣传|宣传不符|实物不符|责任[:：]?主播/.test(value)) return { type: "讲解夸大", role: "主播", mode: "自动关键词匹配" };
+  return { type: "待人工判定", role: "", mode: "待人工标记" };
+}
+function completedReturn(refund = {}) {
+  const status = [refund.refundStatus, refund.refundStatusDesc, refund.status].map(text).join(" ").toUpperCase();
+  if (/取消|拒绝|关闭|失败|CANCEL|REJECT|CLOSED|FAIL/.test(status)) return false;
+  if (/待处理|申请中|等待|待审核|PENDING|WAIT/.test(status)) return false;
+  return number(refund.refundAmount) > 0 || Boolean(text(refund.returnLogisticsNo)) || /成功|完成|退货|退款|SUCCESS|COMPLETE/.test(status);
+}
 function sameMonth(timestamp, month) {
   const { start, end } = monthBounds(month);
   return number(timestamp) >= start.getTime() && number(timestamp) <= end.getTime();
@@ -78,7 +96,7 @@ function mapDailyOverview(items, day) {
 function mapProductProfit(items, day) {
   return uniqueBy(items.map((item) => ({
     [KEY]: `${day}|${text(item.platform)}|${text(item.sellerNick)}|${text(item.tid)}|${text(item.orderId)}|${text(item.skuId)}`,
-    "日期": dateMs(day), "商品名称": text(item.itemTitle), "商品编码": text(item.outerId), "SKU_ID": text(item.skuId),
+    "日期": dateMs(day), "订单编号": text(item.tid), "子订单编号": text(item.orderId || item.oid), "商品名称": text(item.itemTitle), "商品编码": text(item.outerId), "SKU_ID": text(item.skuId),
     "平台类型": text(item.platform), "利润": money(item.netSalesProfit), "利润率": number(item.netSalesProfitMargin) / 100,
     "销售数量": number(item.number), "销售金额": money(item.payment), "销售成本": money(item.paymentCost),
     "销售毛利": money(item.paymentProfit), "销售毛利率": number(item.paymentProfitMargin) / 100,
@@ -116,6 +134,8 @@ function mapRefunds(refunds) {
   const rows = [];
   for (const refund of refunds) {
     const items = refund.items?.length ? refund.items : [{}];
+    const remark = customerServiceRemark(refund);
+    const responsibility = classifyAfterSalesResponsibility(remark);
     for (const item of items) rows.push({
       [KEY]: `${text(refund.refundId)}|${text(item.outerSkuId || item.skuId || "-")}|${text(item.title || "-")}`,
       "退款编号": text(refund.refundId), "订单编号": text(refund.tid), "平台订单号": text(refund.ptTid), "店铺ID": text(refund.sellerId),
@@ -125,6 +145,7 @@ function mapRefunds(refunds) {
       "货物状态": text(refund.goodsStatus), "货物状态说明": text(refund.goodsStatusDesc), "物流公司名称": text(refund.logisticsName),
       "退货物流单号": text(refund.returnLogisticsNo), "商品标题": text(item.title), "规格名称": text(item.skuProperties),
       "商家编码": text(item.outerId), "商家规格编码": text(item.outerSkuId), "售后数量": number(item.refundNum), "商品退款金额": money(item.refundAmount),
+      "客服原始备注": remark, "责任判定类型": responsibility.type, "责任判定方式": responsibility.mode, "责任岗位": responsibility.role,
       [SYNC_TIME]: Date.now(),
     });
   }
@@ -204,8 +225,17 @@ export class DeliverySyncService {
       { field_name: "ERP利润", type: 2 }, { field_name: "飞书利润", type: 2 }, { field_name: "差额", type: 2 },
       { field_name: "覆盖天数", type: 2 }, { field_name: "状态", type: 1 }, { field_name: "核对时间", type: 5 },
     ]);
+    const adjustments = await this.feishu.ensureTable("18_提成扣款明细", [
+      { field_name: "扣款唯一键", type: 1 }, { field_name: "日期", type: 5 }, { field_name: "姓名", type: 1 },
+      { field_name: "角色", type: 1 }, { field_name: "店铺", type: 1 }, { field_name: "扣款类型", type: 1 },
+      { field_name: "金额", type: 2 }, { field_name: "订单编号", type: 1 }, { field_name: "原成交日期", type: 5 },
+      { field_name: "揽收时间", type: 1 }, { field_name: "客服原始备注", type: 1 }, { field_name: "责任判定类型", type: 1 },
+      { field_name: "责任岗位", type: 1 }, { field_name: "说明", type: 1 }, { field_name: "处罚原因", type: 1 },
+      { field_name: "店铺承担金额", type: 2 }, { field_name: "状态", type: 1 },
+    ]);
     this.tables.logs = { id: logs.table_id, name: "16_同步日志" };
     this.tables.reconciliation = { id: reconcile.table_id, name: "17_月度利润对账" };
+    this.tables.adjustments = { id: adjustments.table_id, name: "18_提成扣款明细" };
     await this.feishu.ensureField(this.tables.payroll.id, "工资唯一键", 1);
     return this.tables;
   }
@@ -287,8 +317,111 @@ export class DeliverySyncService {
     return { total: rows.length, created: created.succeeded.length, updated: updated.succeeded.length, failed: 0, failures: [] };
   }
 
+  async buildCommissionLedger(productItems, day) {
+    if (!productItems.length) return { total: 0, created: 0, updated: 0, failed: 0, failures: [] };
+    const calculator = new DashboardService({ feishu: this.feishu });
+    const reference = await calculator.loadReferenceData();
+    const people = (reference.peopleRecords || []).map((record) => record.fields || {}).filter((person) => scalar(person["启用提成展示"]) !== "否");
+    const rules = calculator.rulesFromRecords(reference.ruleRecords || [], day);
+    const grouped = new Map();
+    for (const raw of productItems) {
+      const orderNo = text(raw.tid || raw.tradeId || raw.orderId);
+      if (!orderNo) continue;
+      const item = { ...raw, number: raw.actualNumber ?? raw.number, payment: raw.actualPayment ?? raw.payment };
+      const bucket = grouped.get(orderNo) || [];
+      bucket.push(item);
+      grouped.set(orderNo, bucket);
+    }
+    const rows = [];
+    for (const [orderNo, items] of grouped) {
+      const products = calculator.calculateProducts(items, rules, people, day, day);
+      const store = text(items[0]?.sellerNick); const platform = text(items[0]?.platform);
+      const personnel = [];
+      for (const role of ["主播", "中控", "助播"]) {
+        const members = people.filter((person) => scalar(person["所属店铺"]) === store && scalar(person["角色"] || "主播") === role);
+        if (!members.length) continue;
+        const roleTotal = money(products.reduce((total, product) => total + number(product.roleCommission?.[role]), 0));
+        const personalAmount = money(roleTotal / members.length);
+        for (const member of members) if (personalAmount > 0) personnel.push({ name: scalar(member["姓名"]), role, amount: personalAmount });
+      }
+      const originalTime = text(items[0]?.payTime || items[0]?.created || items[0]?.tradeCreatedTime);
+      const originalTimestamp = Number.isFinite(Date.parse(originalTime)) ? Date.parse(originalTime) : dateMs(day);
+      rows.push({
+        [KEY]: `${day}|${orderNo}`, "订单编号": orderNo, "原成交日期": originalTimestamp,
+        "揽收日期": dateMs(day), "揽收时间": text(items[0]?.sysShipTime || items[0]?.sendTime || items[0]?.shipTime || `${day} 00:00:00`),
+        "店铺": store, "平台": platform, "人员提成JSON": JSON.stringify(personnel),
+        "团队计提提成": money(products.reduce((total, product) => total + number(product.teamCommission), 0)), "状态": "已计提", [SYNC_TIME]: Date.now(),
+      });
+    }
+    return this.writePartition("22_订单提成台账", day, rows);
+  }
+
+  async loadCommissionLedger(orderNumbers) {
+    const wanted = new Set(orderNumbers.filter(Boolean));
+    const found = new Map();
+    if (!wanted.size) return found;
+    const tables = (await this.feishu.listTables()).filter((table) => table.name.startsWith("22_订单提成台账_")).sort((a, b) => b.name.localeCompare(a.name));
+    for (const table of tables) {
+      const records = await this.feishu.listRecords(table.table_id);
+      for (const record of records) {
+        const fields = record.fields || {};
+        const orderNo = scalar(fields["订单编号"]);
+        if (!wanted.has(orderNo)) continue;
+        const list = found.get(orderNo) || [];
+        list.push(fields); found.set(orderNo, list);
+      }
+      if ([...wanted].every((orderNo) => found.has(orderNo))) break;
+    }
+    return found;
+  }
+
+  async syncAutomaticAfterSalesAdjustments(refunds, day) {
+    const uniqueRefunds = uniqueBy((refunds || []).filter(completedReturn), (refund) => text(refund.tid || refund.orderId));
+    const ledger = await this.loadCommissionLedger(uniqueRefunds.map((refund) => text(refund.tid || refund.orderId)));
+    const rows = [];
+    for (const refund of uniqueRefunds) {
+      const orderNo = text(refund.tid || refund.orderId);
+      const ledgerRows = ledger.get(orderNo) || [];
+      if (!ledgerRows.length) continue; // No pickup ledger means no commission was accrued.
+      const remark = customerServiceRemark(refund);
+      const responsibility = classifyAfterSalesResponsibility(remark);
+      const personnel = new Map();
+      for (const ledgerRow of ledgerRows) {
+        let parsed = [];
+        try { parsed = JSON.parse(scalar(ledgerRow["人员提成JSON"]) || "[]"); } catch { parsed = []; }
+        for (const person of parsed) {
+          const key = `${person.name}|${person.role}`;
+          const current = personnel.get(key) || { name: person.name, role: person.role, amount: 0 };
+          current.amount += number(person.amount); personnel.set(key, current);
+        }
+      }
+      const firstLedger = ledgerRows[0];
+      for (const person of personnel.values()) {
+        if (person.amount <= 0) continue;
+        rows.push({
+          "扣款唯一键": `auto-reversal|${orderNo}|${person.name}`, "日期": dateMs(day), "姓名": person.name, "角色": person.role,
+          "店铺": scalar(firstLedger["店铺"]), "扣款类型": "提成回退", "金额": money(person.amount), "订单编号": orderNo,
+          "原成交日期": number(firstLedger["原成交日期"]) || dateMs(day), "揽收时间": scalar(firstLedger["揽收时间"]), "客服原始备注": remark,
+          "责任判定类型": responsibility.type, "责任岗位": responsibility.role, "说明": "订单揽收后发生退货退款，收回该订单原已计提提成", "店铺承担金额": 0, "状态": "自动生效",
+        });
+      }
+      if (responsibility.role) {
+        const responsible = [...personnel.values()].filter((person) => person.role === responsibility.role);
+        const personalShare = responsible.length ? money(2.5 / responsible.length) : 0;
+        for (const person of responsible) rows.push({
+          "扣款唯一键": `auto-loss-share|${orderNo}|${person.name}`, "日期": dateMs(day), "姓名": person.name, "角色": person.role,
+          "店铺": scalar(firstLedger["店铺"]), "扣款类型": "售后损耗分摊", "金额": personalShare, "订单编号": orderNo,
+          "原成交日期": number(firstLedger["原成交日期"]) || dateMs(day), "揽收时间": scalar(firstLedger["揽收时间"]), "客服原始备注": remark,
+          "责任判定类型": responsibility.type, "责任岗位": responsibility.role, "说明": `逆向运费5元，店铺承担2.5元，${responsibility.role}分摊剩余2.5元`,
+          "店铺承担金额": 2.5, "状态": "自动生效",
+        });
+      }
+    }
+    return this.upsert(this.tables.adjustments, rows, "扣款唯一键");
+  }
+
   async logDay(day, fields) {
-    const succeeded = fields["状态"] === "成功";
+    const succeeded = fields["状态"] !== "失败";
     return this.upsert(this.tables.logs, [{
       "任务键": `day|${day}`, "日期": day, "完成时间": Date.now(),
       ...(succeeded ? { "失败原因": "" } : {}), ...fields,
@@ -316,9 +449,11 @@ export class DeliverySyncService {
         dailyOverview: await this.upsert(this.tables.dailyOverview, overviewRows),
         storeProfit: await this.upsert(this.tables.storeProfit, mapStoreProfit(storeItems, day)),
         productProfit: await this.writePartition("03_商品利润明细", day, mapProductProfit(productItems, day)),
+        commissionLedger: await this.buildCommissionLedger(productItems, day),
         orders: await this.writePartition("06_订单列表", day, mapOrders(trades)),
         refunds: await this.writePartition("07_售后列表", day, mapRefunds(refunds)),
         logistics: await this.writePartition("08_物流列表", day, mapLogistics(logistics)),
+        adjustments: await this.syncAutomaticAfterSalesAdjustments(refunds, day),
       };
       for (const [dataType, write] of Object.entries(result)) {
         if (write.failed || write.created + write.updated !== write.total) {
@@ -326,8 +461,10 @@ export class DeliverySyncService {
           throw new Error(`${day} ${dataType}写入不完整：成功${write.created + write.updated}/总计${write.total}，失败${write.failed}；${reason}`);
         }
       }
-      await this.logDay(day, { "状态": "成功", "订单数": result.orders.total, "售后数": result.refunds.total, "店铺利润数": result.storeProfit.total, "商品利润数": result.productProfit.total });
-      this.logger.info(JSON.stringify({ day, status: "success", ...Object.fromEntries(Object.entries(result).map(([key, value]) => [key, value.total])) }));
+      const profitPending = result.orders.total > 0 && result.storeProfit.total === 0;
+      const status = profitPending ? "成功（利润待生成）" : "成功";
+      await this.logDay(day, { "状态": status, "订单数": result.orders.total, "售后数": result.refunds.total, "店铺利润数": result.storeProfit.total, "商品利润数": result.productProfit.total });
+      this.logger.info(JSON.stringify({ day, status: profitPending ? "profit_pending" : "success", ...Object.fromEntries(Object.entries(result).map(([key, value]) => [key, value.total])) }));
       return result;
     } catch (error) {
       await this.logDay(day, { "状态": "失败", "失败原因": error.message });
