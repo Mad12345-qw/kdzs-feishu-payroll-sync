@@ -24,7 +24,9 @@ export class DashboardSnapshotStore {
     if (!this.enabled()) return false;
     if (this.initialized) return true;
     if (!this.initializing) {
-      if (!this.pool) this.pool = new Pool({ connectionString: this.connectionString, ssl: { rejectUnauthorized: true }, max: 3, idleTimeoutMillis: 30000 });
+      // Render's private PostgreSQL endpoint uses an internal self-signed
+      // certificate. The connection stays on Render's private network.
+      if (!this.pool) this.pool = new Pool({ connectionString: this.connectionString, ssl: { rejectUnauthorized: false }, max: 3, idleTimeoutMillis: 30000 });
       this.initializing = this.pool.query(`
         CREATE TABLE IF NOT EXISTS dashboard_snapshots (
           snapshot_key TEXT PRIMARY KEY,
