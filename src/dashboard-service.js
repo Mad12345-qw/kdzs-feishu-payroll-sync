@@ -43,6 +43,26 @@ function recordDate(fields) { return parseDate(fields?.["日期"] ?? fields?.["�
 function sum(rows, field) { return money(rows.reduce((total, row) => total + number(row[field]), 0)); }
 function clampRate(value) { return Math.min(1, Math.max(0, number(value))); }
 function clampCap(value) { return Math.max(0, money(value)); }
+
+function deductionCategory(row) {
+  const value = scalar(row?.["扣款类型"] ?? row?.["类型"] ?? "");
+  if (/售后损耗分摊|损耗分摊/.test(value)) return "loss_share";
+  return /提成回退|提成回冲|退货提成|退款提成|回退|回冲/.test(value) ? "reversal" : "penalty";
+}
+function deductionTypeLabel(category) { return category === "reversal" ? "提成回退" : category === "loss_share" ? "售后损耗分摊" : "责任罚金"; }
+function deductionOrderNo(row) { return scalar(row?.["订单编号"] ?? row?.["订单号"] ?? row?.tid ?? row?.orderNo ?? "—"); }
+function deductionTransactionDate(row) { return parseDate(row?.["原成交日期"] ?? row?.["成交时间"] ?? row?.["成交日期"]); }
+
+export function isEffectivePaidTrade(trade = {}) {
+  const paid = number(trade.receivedPayment ?? trade.payment ?? trade.paidAmount);
+  const status = [trade.status, trade.tradeStatus, trade.refundStatus, trade.refund_status].map((value) => text(value)).join(" ").toUpperCase();
+  const source = [trade.source, trade.tradeSource, trade.remark, trade.buyerMessage].map((value) => text(value)).join(" ").toUpperCase();
+  const refunded = number(trade.refundAmount ?? trade.refundFee ?? trade.refundPayment ?? trade.refundedAmount);
+  const invalidStatus = /未付款|未支付|关闭|取消|作废|WAIT_BUYER_PAY|TRADE_CLOSED|CLOSED|CANCEL/.test(status);
+  const testOrder = /测试|TEST/.test(source);
+  const fullRefund = (paid > 0 && refunded >= paid) || /全额退款|全部退款|全退|FULL_REFUND|REFUND_ALL/.test(status);
+  return paid > 0 && !invalidStatus && !testOrder && !fullRefund;
+}
 export function dashboardDateRange(period, date, startDate, endDate) {
   const selected = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date : chinaDate();
   if (period === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(startDate || "") && /^\d{4}-\d{2}-\d{2}$/.test(endDate || "")) {
@@ -65,30 +85,45 @@ export function dashboardDateRange(period, date, startDate, endDate) {
   return { startDate: selected, endDate: selected, label: "今日" };
 }
 
+// Today's orders are still changing, so the live board uses the order-time view.
+// A completed calendar day must use the ERP shipment-time view: it excludes orders
+// cancelled before dispatch and is the only basis used for settlement.
+export function dashboardBasisForRange(range, today = chinaDate()) {
+  if (range.endDate < today) return "shipped";
+  if (range.startDate >= today) return "placed";
+  return "mixed";
+}
+
+function timeBasisForDate(date, today = chinaDate()) {
+  return date < today ? 3 : 2;
+}
+
 function inCachedScope(row, store, platform) {
   return (store === "全部店铺" || text(row.sellerNick) === store)
     && (platform === "全部平台" || text(row.platform) === platform);
 }
 
-function cachedData(rows, startDate, endDate, basis, store, platform) {
-  const entries = (rows || []).filter((row) => row.date >= startDate && row.date <= endDate && Number(row.time_basis) === basis);
-  const flatten = (field) => entries.flatMap((row) => row[field] || []).filter((row) => inCachedScope(row, store, platform));
-  const orders = flatten("orders");
+function cachedData(rows, startDate, endDate, store, platform, today = chinaDate()) {
+  const entries = (rows || []).filter((row) => row.date >= startDate && row.date <= endDate && Number(row.time_basis) === timeBasisForDate(row.date, today));
+  const shipmentEntries = (rows || []).filter((row) => row.date >= startDate && row.date <= endDate && Number(row.time_basis) === 3);
+  const flatten = (source, field) => source.flatMap((row) => row[field] || []).filter((row) => inCachedScope(row, store, platform));
+  const orders = flatten(entries, "orders");
   return {
     orders: { orderCount: Math.round(orders.reduce((total, row) => total + number(row.orderCount ?? 1), 0)), sales: money(orders.reduce((total, row) => total + number(row.receivedPayment || row.payment), 0)), rows: orders },
-    storeProfits: flatten("storeProfits"), productProfits: flatten("productProfits"), refunds: flatten("refunds"),
-    complete: entries.length === Math.round((new Date(`${endDate}T00:00:00+08:00`).getTime() - new Date(`${startDate}T00:00:00+08:00`).getTime()) / 86400000) + 1,
+    storeProfits: flatten(shipmentEntries, "storeProfits"), productProfits: flatten(shipmentEntries, "productProfits"), refunds: flatten(entries, "refunds"),
+    complete: entries.length === Math.round((new Date(`${endDate}T00:00:00+08:00`).getTime() - new Date(`${startDate}T00:00:00+08:00`).getTime()) / 86400000) + 1 && shipmentEntries.length === entries.length,
   };
 }
 
 export class DashboardService {
-  constructor({ feishu, kdzs = null, getKdzs = null, cacheSeconds = 300, dashboardUrl = "", accessToken = "", logger = console }) {
+  constructor({ feishu, kdzs = null, getKdzs = null, cacheSeconds = 300, dashboardUrl = "", accessToken = "", paymentTimeType = "PAY_TIME", logger = console }) {
     this.feishu = feishu;
     this.kdzs = kdzs;
     this.getKdzs = getKdzs;
     this.cacheMs = Math.max(15, cacheSeconds) * 1000;
     this.dashboardUrl = dashboardUrl.replace(/\/$/, "");
     this.accessToken = accessToken;
+    this.paymentTimeType = paymentTimeType;
     this.logger = logger;
     this.tables = null;
     this.cache = new Map();
@@ -148,6 +183,9 @@ export class DashboardService {
       { field_name: "角色", type: 3 }, { field_name: "店铺", type: 1 }, { field_name: "类型", type: 3 },
       { field_name: "金额", type: 2 }, { field_name: "说明", type: 1 }, { field_name: "状态", type: 3 },
     ]);
+    for (const [name, type] of [["扣款类型", 1], ["订单编号", 1], ["原成交日期", 5], ["处罚原因", 1]]) {
+      await this.feishu.ensureField(deductions.table_id, name, type);
+    }
     this.tables[TABLE_NAMES.deductions] = deductions;
 
     const rulesTable = await this.feishu.ensureTable(TABLE_NAMES.rules, [
@@ -235,8 +273,10 @@ export class DashboardService {
 
   async queryOrders(client, startDate, endDate, store, platform) {
     if (!client) return null;
-    const trades = await client.listAll("kdzs.erp.api.trade.list", { timeType: "CREATE_TIME", startTime: `${startDate} 00:00:00`, endTime: `${endDate} 23:59:59` }, 200);
-    const rows = trades.filter((trade) => (store === "全部店铺" || text(trade.sellerNick) === store) && (platform === "全部平台" || text(trade.platform) === platform));
+    const trades = await client.listAll("kdzs.erp.api.trade.list", { timeType: this.paymentTimeType, startTime: `${startDate} 00:00:00`, endTime: `${endDate} 23:59:59` }, 200);
+    const rows = trades.filter((trade) => isEffectivePaidTrade(trade)
+      && (store === "全部店铺" || text(trade.sellerNick) === store)
+      && (platform === "全部平台" || text(trade.platform) === platform));
     return { orderCount: rows.length, sales: money(rows.reduce((total, trade) => total + number(trade.receivedPayment || trade.payment), 0)), rows };
   }
 
@@ -305,9 +345,9 @@ export class DashboardService {
     });
   }
 
-  async getDashboard({ date, period = "today", startDate, endDate, store = "全部店铺", platform = "全部平台", basis = "placed", viewer = { scope: "owner" }, rawRows = null, referenceData = null } = {}) {
+  async getDashboard({ date, period = "today", startDate, endDate, store = "全部店铺", platform = "全部平台", viewer = { scope: "owner" }, rawRows = null, referenceData = null } = {}) {
     const range = dashboardDateRange(period, date, startDate, endDate);
-    const safeBasis = ["placed", "shipped", "monthly"].includes(basis) ? basis : "placed";
+    const safeBasis = dashboardBasisForRange(range);
     const key = JSON.stringify({ ...range, store, platform, basis: safeBasis, viewer });
     const cached = this.cache.get(key);
     if (cached && Date.now() - cached.time < this.cacheMs) return cached.value;
@@ -319,34 +359,63 @@ export class DashboardService {
     const isOwner = viewer.scope === "owner";
     const effectiveStore = isOwner ? store : viewer.store;
     const client = rawRows ? null : await this.queryClient();
-    const queryType = safeBasis === "placed" ? 1 : 3;
+    const queryType = safeBasis === "placed" ? 2 : 3;
     const previousDate = dateOnly(new Date(new Date(`${range.startDate}T00:00:00+08:00`).getTime() - 86400000));
     const monthRange = { startDate: `${range.endDate.slice(0, 7)}-01`, endDate: range.endDate };
-    const [[ordersLive, profitRowsLive, productRowsLive, refundsLive, yesterdayProductRowsLive], monthly] = rawRows ? (() => {
-      const current = cachedData(rawRows, range.startDate, range.endDate, queryType, effectiveStore, platform);
-      const previous = cachedData(rawRows, previousDate, previousDate, 3, effectiveStore, platform);
-      const month = cachedData(rawRows, monthRange.startDate, monthRange.endDate, 3, effectiveStore, platform);
-      return [[current.orders, current.storeProfits, current.productProfits, current.refunds, previous.productProfits], [month.storeProfits, month.productProfits, month.refunds]];
+    const loadDirectRange = async (start, end) => {
+      if (!client) return { orders: null, storeProfits: null, productProfits: null, refunds: null };
+      const today = chinaDate();
+      const yesterday = dateOnly(new Date(new Date(`${today}T00:00:00+08:00`).getTime() - 86400000));
+      const slices = [];
+      if (start < today) slices.push({ start, end: end < today ? end : yesterday, queryTimeType: 3 });
+      if (end >= today) slices.push({ start: start > today ? start : today, end, queryTimeType: 2 });
+      const parts = await Promise.all(slices.map(async (slice) => {
+        const [orders, storeProfits, productProfits] = await Promise.all([
+          slice.queryTimeType === 2 ? this.queryOrders(client, slice.start, slice.end, effectiveStore, platform) : Promise.resolve(null),
+          this.queryProfit(client, slice.start, slice.end, slice.queryTimeType, effectiveStore, platform),
+          this.queryProducts(client, slice.start, slice.end, slice.queryTimeType, effectiveStore, platform),
+        ]);
+        const shippedOrders = orders || {
+          orderCount: Math.round((productProfits || []).reduce((total, row) => total + number(row.actualNumber ?? row.number), 0)),
+          sales: money((storeProfits || []).reduce((total, row) => total + number(row.actualPayment ?? row.payment), 0)), rows: [],
+        };
+        const normalizedProducts = (productProfits || []).map((row) => slice.queryTimeType === 3
+          ? { ...row, number: row.actualNumber ?? row.number, payment: row.actualPayment ?? row.payment }
+          : { ...row, number: row.number, payment: row.payment });
+        return { orders: shippedOrders, storeProfits: storeProfits || [], productProfits: normalizedProducts };
+      }));
+      const [shipmentProfits, shipmentProducts] = await Promise.all([
+        this.queryProfit(client, start, end, 3, effectiveStore, platform),
+        this.queryProducts(client, start, end, 3, effectiveStore, platform),
+      ]);
+      return {
+        orders: { orderCount: parts.reduce((total, part) => total + number(part.orders.orderCount), 0), sales: money(parts.reduce((total, part) => total + number(part.orders.sales), 0)), rows: parts.flatMap((part) => part.orders.rows) },
+        storeProfits: shipmentProfits || [], productProfits: (shipmentProducts || []).map((row) => ({ ...row, number: row.actualNumber ?? row.number, payment: row.actualPayment ?? row.payment })),
+        refunds: await this.queryRefunds(client, start, end, effectiveStore),
+      };
+    };
+    const [currentLive, monthly] = rawRows ? (() => {
+      const current = cachedData(rawRows, range.startDate, range.endDate, effectiveStore, platform);
+      const previous = cachedData(rawRows, previousDate, previousDate, effectiveStore, platform);
+      const month = cachedData(rawRows, monthRange.startDate, monthRange.endDate, effectiveStore, platform);
+      return [{ ...current, yesterdayProductProfits: previous.productProfits }, { ...month }];
     })() : await Promise.all([
-      Promise.all([
-      this.queryOrders(client, range.startDate, range.endDate, effectiveStore, platform),
-      this.queryProfit(client, range.startDate, range.endDate, queryType, effectiveStore, platform),
-      this.queryProducts(client, range.startDate, range.endDate, queryType, effectiveStore, platform),
-      this.queryRefunds(client, range.startDate, range.endDate, effectiveStore),
-      this.queryProducts(client, previousDate, previousDate, 3, effectiveStore, platform),
-      ]),
-      isOwner ? Promise.all([
-        this.queryProfit(client, monthRange.startDate, monthRange.endDate, 3, effectiveStore, platform),
-        this.queryProducts(client, monthRange.startDate, monthRange.endDate, 3, effectiveStore, platform),
-        this.queryRefunds(client, monthRange.startDate, monthRange.endDate, effectiveStore),
-      ]) : Promise.resolve([null, null, null]),
+      loadDirectRange(range.startDate, range.endDate),
+      isOwner ? loadDirectRange(monthRange.startDate, monthRange.endDate) : Promise.resolve({ storeProfits: null, productProfits: null, refunds: null }),
     ]);
+    const { orders: ordersLive, storeProfits: profitRowsLive, productProfits: productRowsLive, refunds: refundsLive } = currentLive;
+    const yesterdayProductRowsLive = rawRows
+      ? currentLive.yesterdayProductProfits
+      : await this.queryProducts(client, previousDate, previousDate, 3, effectiveStore, platform);
     const allOverview = overviewRecords.map((record) => record.fields || {});
     const inScope = (row) => (effectiveStore === "全部店铺" || scalar(row["店铺名称"]) === effectiveStore)
       && (platform === "全部平台" || scalar(row["平台类型"]) === platform);
     const overview = allOverview.filter((row) => recordDate(row) >= range.startDate && recordDate(row) <= range.endDate && inScope(row));
     const previousRows = allOverview.filter((row) => recordDate(row) === previousDate && (effectiveStore === "全部店铺" || scalar(row["店铺名称"]) === effectiveStore) && (platform === "全部平台" || scalar(row["平台类型"]) === platform));
-    const orders = ordersLive || { orderCount: Math.round(sum(overview, "订单数")), sales: sum(overview, "销售金额"), rows: [] };
+    const orders = ordersLive || (queryType === 3 && profitRowsLive ? {
+      orderCount: Math.round((productRowsLive || []).reduce((total, row) => total + number(row.actualNumber ?? row.number), 0)),
+      sales: money((profitRowsLive || []).reduce((total, row) => total + number(row.actualPayment ?? row.payment), 0)), rows: [],
+    } : { orderCount: Math.round(sum(overview, "订单数")), sales: sum(overview, "销售金额"), rows: [] });
     const profitRows = profitRowsLive || overview.map((row) => ({ sellerNick: row["店铺名称"], platform: row["平台类型"], netSalesProfit: row["利润"] }));
     const scopedProductRows = (rows) => (rows || []).filter((row) =>
       (effectiveStore === "全部店铺" || text(row.sellerNick) === effectiveStore)
@@ -360,8 +429,16 @@ export class DashboardService {
       .filter((person) => viewer.scope === "owner" ? true : scalar(person["所属店铺"]) === viewer.store);
     const rules = this.rulesFromRecords(ruleRecords, range.endDate);
     const products = this.calculateProducts(productRows || [], rules, people, range.startDate, range.endDate);
-    const currentCached = rawRows ? cachedData(rawRows, range.startDate, range.endDate, queryType, effectiveStore, platform) : null;
-    const profitPending = Boolean(ordersLive?.orderCount > 0 && profitRowsLive && profitRowsLive.length === 0);
+    const currentCached = rawRows ? cachedData(rawRows, range.startDate, range.endDate, effectiveStore, platform) : null;
+    // Today's paid-order count can be available before ERP finishes the
+    // shipment/product-profit report. Treat that state as pending instead of
+    // presenting a misleading zero commission. A store summary without its
+    // product lines is also incomplete for per-role commission calculation.
+    const profitPending = Boolean(
+      safeBasis === "placed"
+      && ordersLive?.orderCount > 0
+      && (!profitRowsLive || profitRowsLive.length === 0 || !productRowsLive || productRowsLive.length === 0)
+    );
     const scopedDeductions = (start, end) => deductionRecords.map((record) => record.fields || {}).filter((row) => {
       const d = recordDate(row); return d >= start && d <= end && (effectiveStore === "全部店铺" || scalar(row["店铺"]) === effectiveStore);
     });
@@ -371,10 +448,14 @@ export class DashboardService {
       const name = scalar(person["姓名"]); const role = scalar(person["角色"] || "主播"); const personStore = scalar(person["所属店铺"]);
       const members = people.filter((item) => scalar(item["所属店铺"]) === personStore && scalar(item["角色"] || "主播") === role && scalar(item["启用提成展示"]) !== "否").length || 1;
       const gross = pending ? null : money(sourceProducts.filter((item) => item.store === personStore).reduce((total, item) => total + number(item.roleCommission[role]) / members, 0));
-      const deduction = money(sourceDeductions.filter((row) => scalar(row["姓名"]) === name).reduce((total, row) => total + number(row["金额"]), 0));
-      return { name, role, store: personStore, grossCommission: gross, deduction, pending: gross == null, commission: gross == null ? null : money(Math.max(0, gross - deduction)) };
+      const personalDeductions = sourceDeductions.filter((row) => scalar(row["姓名"]) === name);
+      const commissionReversal = money(personalDeductions.filter((row) => deductionCategory(row) === "reversal").reduce((total, row) => total + Math.max(0, number(row["金额"])), 0));
+      const afterSalesLossShare = money(personalDeductions.filter((row) => deductionCategory(row) === "loss_share").reduce((total, row) => total + Math.max(0, number(row["金额"])), 0));
+      const responsibilityPenalty = money(personalDeductions.filter((row) => deductionCategory(row) === "penalty").reduce((total, row) => total + Math.max(0, number(row["金额"])), 0));
+      const deduction = money(commissionReversal + afterSalesLossShare + responsibilityPenalty);
+      return { name, role, store: personStore, grossCommission: gross, currentAccruedCommission: gross, commissionReversal, afterSalesLossShare, responsibilityPenalty, deduction, pending: gross == null, commission: gross == null ? null : money(Math.max(0, gross - commissionReversal - afterSalesLossShare - responsibilityPenalty)) };
     });
-    const commissions = calculateCommissions(products, deductions, profitPending && safeBasis === "placed");
+    const commissions = calculateCommissions(products, deductions, profitPending);
     const yesterdayProducts = this.calculateProducts(yesterdayProductRows, rules, people, previousDate, previousDate);
     const shippedCount = rawRows
       ? Math.round((yesterdayProductRowsLive || []).reduce((total, row) => total + number(row.number), 0))
@@ -385,9 +466,9 @@ export class DashboardService {
       const role = viewer.role || "主播"; const members = people.filter((person) => scalar(person["所属店铺"]) === item.store && scalar(person["角色"] || "主播") === role && scalar(person["启用提成展示"]) !== "否").length || 1;
       const personal = money(number(item.roleCommission[role]) / members); return isOwner ? { ...item, personalByRole: Object.fromEntries(ROLES.map((r) => [r, item.roleCommission[r]])) } : { key: item.key, name: item.name, sku: item.sku, quantity: item.quantity, sales: item.sales, personalCommission: personal };
     });
-    const totalTeamCommission = profitPending && safeBasis === "placed" ? null : money(products.reduce((total, item) => total + item.teamCommission, 0));
+    const totalTeamCommission = profitPending ? null : money(products.reduce((total, item) => total + item.teamCommission, 0));
     const profit = money((profitRows || []).reduce((total, row) => total + number(row.netSalesProfit), 0));
-    const [monthProfitRowsLive, monthProductRowsLive, monthRefundsLive] = monthly;
+    const { storeProfits: monthProfitRowsLive, productProfits: monthProductRowsLive, refunds: monthRefundsLive } = monthly;
     const monthProfit = money((monthProfitRowsLive || []).reduce((total, row) => total + number(row.netSalesProfit), 0));
     const monthProducts = isOwner ? this.calculateProducts(scopedProductRows(monthProductRowsLive || await this.mirrorProductRows(monthRange.startDate, monthRange.endDate)), rules, people, monthRange.startDate, monthRange.endDate) : [];
     const monthDeductions = isOwner ? scopedDeductions(monthRange.startDate, monthRange.endDate) : [];
@@ -398,9 +479,19 @@ export class DashboardService {
       shippedCount, teamCommission: totalTeamCommission,
       monthProfit: monthProfitRowsLive ? monthProfit : null, monthTeamCommission: monthProductRowsLive ? money(monthProducts.reduce((total, item) => total + item.teamCommission, 0)) : null,
       monthAfterSalesLoss: monthRefundsLive ? money((monthRefundsLive || []).reduce((total, row) => total + number(row.refundAmount), 0)) : null,
-      afterSalesLoss: money((refunds || []).reduce((total, row) => total + number(row.refundAmount), 0)), misShipmentLoss: money(deductions.filter((row) => scalar(row["类型"]).includes("错发")).reduce((total, row) => total + number(row["金额"]), 0)),
+      afterSalesLoss: money((refunds || []).reduce((total, row) => total + number(row.refundAmount), 0)), misShipmentLoss: money(deductions.filter((row) => deductionCategory(row) === "penalty").reduce((total, row) => total + number(row["金额"]), 0)),
     };
-    const visibleDeductions = deductions.filter((row) => isOwner || scalar(row["姓名"]) === viewer.name).map((row) => ({ date: recordDate(row), name: scalar(row["姓名"]), role: scalar(row["角色"]), type: scalar(row["类型"] || "其他"), amount: money(row["金额"]), note: scalar(row["说明"]), status: scalar(row["状态"] || "已记录") }));
+    const visibleDeductions = deductions.filter((row) => isOwner || scalar(row["姓名"]) === viewer.name).map((row) => {
+      const category = deductionCategory(row);
+      const type = deductionTypeLabel(category);
+      return {
+        date: recordDate(row), name: scalar(row["姓名"]), role: scalar(row["角色"]), category, type,
+        orderNo: deductionOrderNo(row), transactionDate: deductionTransactionDate(row), amount: money(row["金额"]),
+        pickupTime: scalar(row["揽收时间"]), customerServiceRemark: scalar(row["客服原始备注"]), responsibilityType: scalar(row["责任判定类型"]), responsibilityRole: scalar(row["责任岗位"]),
+        note: scalar(category === "reversal" ? row["说明"] || "订单售后退货，调减过往提成" : row["处罚原因"] || row["说明"] || "责任过失处罚"),
+        status: scalar(row["状态"] || "已记录"),
+      };
+    });
     const afterSalesDetails = (refunds || []).map((row) => ({ orderNo: text(row.tid || row.orderId || row.tradeId || row.refundId || "—"), store: text(row.sellerNick), reason: text(row.reason || row.refundReason || row.remark || "售后退款"), status: text(row.refundStatus || row.status || "处理中"), amount: money(row.refundAmount) }));
     const operationalExceptions = isOwner
       ? [...afterSalesDetails.map((item) => ({ ...item, type: "售后退款" })), ...visibleDeductions.map((item) => ({ orderNo: item.date || "—", store: "", reason: item.note, status: item.status, amount: item.amount, type: item.type, name: item.name }))]
@@ -412,15 +503,15 @@ export class DashboardService {
     });
     const response = {
       viewer, period: range, rules: isOwner ? rules : null,
-      meta: { selectedDate: range.endDate, latestDataDate: range.endDate, basis: safeBasis, basisLabel: safeBasis === "placed" ? "下单成交" : safeBasis === "shipped" ? "已发货" : "月度扣售后", source: rawRows ? "快递助手 ERP → PostgreSQL 日缓存" : "快递助手 ERP 原始接口 → 飞书同步", generatedAt: new Date().toISOString(), isOwner, plansTableId: configuration.plansTable, cacheIncomplete: rawRows ? !currentCached.complete : false },
+      meta: { selectedDate: range.endDate, latestDataDate: range.endDate, basis: safeBasis, basisLabel: safeBasis === "placed" ? "付款成交 / 揽收计提" : safeBasis === "shipped" ? "已发货核算" : "今日付款 + 揽收计提", source: rawRows ? "快递助手 ERP → PostgreSQL 日缓存" : "快递助手 ERP 原始接口 → 飞书同步", generatedAt: new Date().toISOString(), isOwner, plansTableId: configuration.plansTable, cacheIncomplete: rawRows ? !currentCached.complete : false },
       filters: { stores: isOwner ? [...new Set(people.map((row) => scalar(row["所属店铺"])).filter(Boolean))].sort() : [viewer.store], platforms: [...new Set([...(productRows || []).map((row) => text(row.platform)), ...overview.map((row) => scalar(row["平台类型"]))].filter(Boolean))].sort(), roles: isOwner ? ROLES : [viewer.role] },
       summary: isOwner ? summary : { orderCount: summary.orderCount, sales: summary.sales, shippedCount: summary.shippedCount, yesterdayShippedCommission: yesterdayCommissions[0]?.commission ?? null, yesterdayShippedPending: yesterdayCommissions[0]?.pending ?? yesterdayPending, refundCount: viewer.role === "中控" ? summary.refundCount : undefined },
-      commissions: commissions.map((item) => isOwner ? item : { name: item.name, role: item.role, store: item.store, pending: item.pending, commission: item.commission }),
+      commissions: commissions.map((item) => isOwner ? item : { name: item.name, role: item.role, store: item.store, pending: item.pending, commission: item.commission, currentAccruedCommission: item.currentAccruedCommission, commissionReversal: item.commissionReversal, afterSalesLossShare: item.afterSalesLossShare, responsibilityPenalty: item.responsibilityPenalty }),
       team: isOwner ? ROLES.map((role) => ({ role, pending: commissions.some((item) => item.role === role && item.pending), commission: commissions.some((item) => item.role === role && item.pending) ? null : money(commissions.filter((item) => item.role === role).reduce((total, item) => total + number(item.commission), 0)) })).filter((item) => item.commission != null || item.pending || people.some((p) => scalar(p["角色"]) === item.role)) : [],
       deductions: visibleDeductions,
       operationalExceptions,
       products: employeeProducts,
-      reminders: isOwner ? [`${range.label} ERP 利润与售后均来自快递助手原始返回；错发扣款只从责任人个人提成扣除。`, ...(summary.misShipmentLoss > 0 ? [`本期错发损耗 ¥${summary.misShipmentLoss.toFixed(2)}；减少错发可直接增收同等金额。`] : []), ...configurationReminders] : [],
+      reminders: isOwner ? [`${safeBasis === "placed" ? "今日销售额按付款时间统计有效成交；提成仅在订单产生揽收发货记录后计提，未付款、取消、关闭、测试及全额退款订单不计入。" : safeBasis === "shipped" ? "该历史日期按 ERP 已发货数据核算，未发货或取消订单不计入销售额。" : "今天按付款时间统计有效成交并按揽收计提，昨天及更早日期按 ERP 已发货数据核算。"} 错发扣款只从责任人个人提成扣除。`, ...(summary.misShipmentLoss > 0 ? [`本期错发损耗 ¥${summary.misShipmentLoss.toFixed(2)}`] : []), ...configurationReminders] : [],
     };
     this.cache.set(key, { time: Date.now(), value: response });
     return response;

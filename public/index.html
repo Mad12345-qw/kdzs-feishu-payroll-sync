@@ -53,7 +53,7 @@
         <button class="filter-chip" id="custom-date-btn">自定义日期 <i data-lucide="calendar-days"></i></button>
         <button class="filter-chip" id="store-filter-btn">全部店铺 <i data-lucide="chevron-down"></i></button>
         <button class="filter-chip" id="platform-filter-btn">全部平台 <i data-lucide="chevron-down"></i></button>
-        <button class="filter-chip" id="basis-filter-btn">下单口径 <i data-lucide="chevron-down"></i></button>
+          <button class="filter-chip" id="basis-filter-btn" disabled>自动核算口径</button>
         <div class="filter-popover hidden" id="filter-popover"></div>
         <div class="custom-date-popover hidden" id="custom-date-popover"><label>开始日期<input type="date" id="custom-start"></label><label>结束日期<input type="date" id="custom-end"></label><button id="custom-apply">应用区间</button></div>
       </section>
@@ -67,11 +67,11 @@
         <section class="view active" id="view-owner">
           <div class="hero-grid">
             <article class="hero-card gradient-card">
-              <div class="hero-head"><span>今日经营结果</span><i data-lucide="trending-up"></i></div>
+              <div class="hero-head"><span>所选期间经营结果</span><i data-lucide="trending-up"></i></div>
               <div class="hero-metrics">
-                <div><small>今日销售额</small><strong id="owner-sales">—</strong></div>
+                <div><small>销售额</small><strong id="owner-sales">—</strong></div>
                 <div><small>ERP 利润</small><strong id="owner-profit">—</strong></div>
-                <div><small>今日退款</small><strong id="owner-refund">—</strong></div>
+                <div><small>退款</small><strong id="owner-refund">—</strong></div>
                 <div><small>错发损耗</small><strong id="owner-loss">—</strong></div>
               </div>
             </article>
@@ -80,7 +80,7 @@
 
           <div class="content-grid two-thirds">
             <article class="panel">
-              <div class="panel-head"><div><p class="eyebrow">人员收入</p><h2>今日提成一览</h2></div><span class="pill" id="basis-label"></span></div>
+              <div class="panel-head"><div><p class="eyebrow">人员收入</p><h2>所选期间提成一览</h2></div><span class="pill" id="basis-label"></span></div>
               <div class="table-wrap"><table><thead><tr><th>姓名</th><th>角色</th><th>店铺</th><th>扣款前提成</th><th>预计提成</th></tr></thead><tbody id="owner-commission-body"></tbody></table></div>
             </article>
             <article class="panel reminder-panel">
@@ -100,8 +100,8 @@
 
         <section class="view" id="view-streamer">
           <div class="stats-grid four">
-            <article class="metric-card"><span class="metric-icon orange"><i data-lucide="shopping-bag"></i></span><small>今日订单</small><strong id="stream-orders">—</strong><p>ERP 同步订单</p></article>
-            <article class="metric-card"><span class="metric-icon blue"><i data-lucide="badge-dollar-sign"></i></span><small>今日销售额</small><strong id="stream-sales">—</strong><p>不做二次核算</p></article>
+            <article class="metric-card"><span class="metric-icon orange"><i data-lucide="shopping-bag"></i></span><small>所选期间订单</small><strong id="stream-orders">—</strong><p>ERP 自动核算</p></article>
+            <article class="metric-card"><span class="metric-icon blue"><i data-lucide="badge-dollar-sign"></i></span><small>所选期间销售额</small><strong id="stream-sales">—</strong><p>不做二次核算</p></article>
             <article class="metric-card emphasis"><span class="metric-icon orange"><i data-lucide="coins"></i></span><small>我的预估提成</small><strong id="stream-commission">—</strong><p id="stream-rate">按人员表比例</p></article>
             <article class="metric-card emphasis"><span class="metric-icon blue"><i data-lucide="package-check"></i></span><small>昨日实发到手提成</small><strong id="stream-yesterday-commission">—</strong><p id="stream-shipped">昨日 ERP 实发数量</p></article>
           </div>
@@ -109,11 +109,23 @@
             <article class="panel"><div class="panel-head"><div><p class="eyebrow">我的商品</p><h2>今日个人预估提成</h2></div><span class="pill">仅展示本人</span></div><div class="table-wrap"><table><thead><tr><th>商品</th><th>销量</th><th>销售额</th><th>我的预估提成</th></tr></thead><tbody id="stream-product-body"></tbody></table></div></article>
             <article class="panel"><div class="panel-head"><div><p class="eyebrow">我的收入</p><h2>提成与扣款</h2></div><span class="metric-icon blue"><i data-lucide="receipt-text"></i></span></div><div id="stream-income" class="income-summary"></div><div id="stream-deductions" class="detail-list"></div></article>
           </div>
+          <article class="panel streamer-adjustment-panel">
+            <div class="panel-head"><div><p class="eyebrow">本期结算调整</p><h2>提成回退与责任罚金</h2></div><span class="pill">当期自动抵扣</span></div>
+            <div class="adjustment-totals">
+              <div class="adjustment-total earned"><small>当期计提提成</small><strong id="stream-accrued-commission">—</strong></div>
+              <div class="adjustment-total reversal"><small>提成回退</small><strong id="stream-commission-reversal">—</strong></div>
+              <div class="adjustment-total loss-share"><small>售后损耗分摊</small><strong id="stream-after-sales-loss-share">—</strong></div>
+              <div class="adjustment-total penalty"><small>责任罚金</small><strong id="stream-responsibility-penalty">—</strong></div>
+              <div class="adjustment-total payable"><small>最终实发提成</small><strong id="stream-final-commission">—</strong></div>
+            </div>
+            <div class="table-wrap"><table class="adjustment-table"><thead><tr><th>订单编号</th><th>原成交日期</th><th>扣款类型</th><th>金额</th><th>说明 / 处罚原因</th></tr></thead><tbody id="stream-adjustment-body"></tbody></table></div>
+            <p class="adjustment-legend"><span class="earned">绿色：正常提成收益</span><span class="reversal">黄色：提成回退，订单退货收回此前发放提成（非处罚）</span><span class="loss-share">橙色：售后损耗分摊</span><span class="penalty">红色：责任罚金，人为工作失误产生额外处罚</span></p>
+          </article>
         </section>
 
         <section class="view" id="view-control">
           <div class="stats-grid four">
-            <article class="metric-card"><span class="metric-icon orange"><i data-lucide="shopping-cart"></i></span><small>今日成交订单</small><strong id="control-orders">—</strong><p>下单口径</p></article>
+            <article class="metric-card"><span class="metric-icon orange"><i data-lucide="shopping-cart"></i></span><small>所选期间核算数量</small><strong id="control-orders">—</strong><p>自动核算口径</p></article>
             <article class="metric-card"><span class="metric-icon blue"><i data-lucide="truck"></i></span><small>昨日已发货</small><strong id="control-shipped">—</strong><p>发货口径</p></article>
             <article class="metric-card"><span class="metric-icon orange"><i data-lucide="rotate-ccw"></i></span><small>今日售后</small><strong id="control-refunds">—</strong><p>ERP 退款数量</p></article>
             <article class="metric-card emphasis"><span class="metric-icon blue"><i data-lucide="wallet-cards"></i></span><small>我的预估提成</small><strong id="control-commission">—</strong><p>仅展示本人</p></article>

@@ -17,7 +17,7 @@ export class DashboardSnapshotStore {
   keyFor({ period = "today", store = "全部店铺", platform = "全部平台", basis = "placed", viewer = {} } = {}) {
     if (!viewer?.scope || !["owner", "employee"].includes(viewer.scope)) return "";
     const identity = viewer.scope === "owner" ? "owner" : `employee:${encodeURIComponent(viewer.name || "")}:${encodeURIComponent(viewer.role || "")}:${encodeURIComponent(viewer.store || "")}`;
-    return `dashboard:v2:${identity}:${encodeURIComponent(period)}:${encodeURIComponent(store)}:${encodeURIComponent(platform)}:${encodeURIComponent(basis)}`;
+    return `dashboard:v4:${identity}:${encodeURIComponent(period)}:${encodeURIComponent(store)}:${encodeURIComponent(platform)}:${encodeURIComponent(basis)}`;
   }
 
   async ensure() {

@@ -3,7 +3,7 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const params = new URLSearchParams(location.search);
 const ownerAccess = params.get("access") || "";
 const storedViewerToken = sessionStorage.getItem("viewerToken") || "";
-const state = { data: null, view: params.get("view") || "owner", period: "today", store: "全部店铺", platform: "全部平台", basis: "placed", viewerToken: storedViewerToken };
+const state = { data: null, view: params.get("view") || "owner", period: "today", store: "全部店铺", platform: "全部平台", viewerToken: storedViewerToken };
 const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
 
 const currency = (value) => value == null ? "—" : `¥${Number(value || 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -17,7 +17,7 @@ function authHeaders() {
   return state.viewerToken ? { Authorization: `Bearer ${state.viewerToken}` } : {};
 }
 function queryParams() {
-  const query = new URLSearchParams({ period: state.period, store: state.store, platform: state.platform, basis: state.basis });
+  const query = new URLSearchParams({ period: state.period, store: state.store, platform: state.platform });
   if (state.period === "custom") { query.set("startDate", $("#custom-start").value); query.set("endDate", $("#custom-end").value); }
   if (ownerAccess) query.set("access", ownerAccess);
   return query;
@@ -25,7 +25,7 @@ function queryParams() {
 function browserCacheKey() {
   const identity = ownerAccess ? "owner" : (state.viewerToken ? `employee-${state.viewerToken.slice(0, 20)}` : "anonymous");
   const scopedStore = ownerAccess ? state.store : "personal-store";
-  return `kdzs-dashboard-v2:${identity}:${state.period}:${scopedStore}:${state.platform}:${state.basis}`;
+  return `kdzs-dashboard-v4:${identity}:${state.period}:${scopedStore}:${state.platform}`;
 }
 function loadBrowserCache() {
   try {
@@ -66,15 +66,15 @@ async function loadDashboard({ force = false } = {}) {
 function renderQuickFilters(data) {
   $("#store-filter-btn").innerHTML = `${escapeHtml(state.store)} <i data-lucide="chevron-down"></i>`;
   $("#platform-filter-btn").innerHTML = `${escapeHtml(state.platform)} <i data-lucide="chevron-down"></i>`;
-  $("#basis-filter-btn").innerHTML = `${state.basis === "placed" ? "下单口径" : state.basis === "shipped" ? "昨日发货" : "月度扣售后"} <i data-lucide="chevron-down"></i>`;
+  $("#basis-filter-btn").textContent = data.meta.basisLabel;
   $$(".period-chip").forEach((button) => button.classList.toggle("active", button.dataset.period === state.period));
   if (window.lucide) window.lucide.createIcons();
 }
 function openFilter(kind) {
-  const popover = $("#filter-popover"); const values = kind === "store" ? ["全部店铺", ...(state.data?.filters?.stores || [])] : kind === "platform" ? ["全部平台", ...(state.data?.filters?.platforms || [])] : [["placed", "下单口径"], ["shipped", "昨日发货"], ["monthly", "月度扣售后"]];
+  const popover = $("#filter-popover"); const values = kind === "store" ? ["全部店铺", ...(state.data?.filters?.stores || [])] : ["全部平台", ...(state.data?.filters?.platforms || [])];
   popover.innerHTML = values.map((value) => { const key = Array.isArray(value) ? value[0] : value; const label = Array.isArray(value) ? value[1] : value; return `<button data-filter-kind="${kind}" data-filter-value="${escapeHtml(key)}">${escapeHtml(label)}</button>`; }).join("");
   popover.classList.remove("hidden");
-  $$("[data-filter-kind]").forEach((button) => button.addEventListener("click", () => { const value = button.dataset.filterValue; if (kind === "store") state.store = value; if (kind === "platform") state.platform = value; if (kind === "basis") state.basis = value; popover.classList.add("hidden"); renderQuickFilters(state.data); loadDashboard(); }));
+  $$("[data-filter-kind]").forEach((button) => button.addEventListener("click", () => { const value = button.dataset.filterValue; if (kind === "store") state.store = value; if (kind === "platform") state.platform = value; popover.classList.add("hidden"); renderQuickFilters(state.data); loadDashboard(); }));
 }
 
 function renderRules(data) {
@@ -94,6 +94,7 @@ function render(data) {
   $("#welcome-line").textContent = `${escapeHtml(viewer?.name || "老板")}，欢迎你`;
   $("#data-note").textContent = meta.source;
   $("#data-date").textContent = `${data.period.label} ${data.period.startDate} 至 ${data.period.endDate}`;
+  $("#basis-label").textContent = meta.basisLabel;
   renderQuickFilters(data); renderRules(data);
   const isOwner = Boolean(meta.isOwner);
   const employeeView = viewer?.role === "中控" ? "control" : "streamer";
@@ -120,10 +121,16 @@ function render(data) {
   $("#reminder-list").innerHTML = reminders.map((item) => `<div class="reminder">${escapeHtml(item)}</div>`).join("");
 
   const mine = commissions[0];
-  $("#stream-orders").textContent = integer(summary.orderCount, " 单"); $("#stream-sales").textContent = currency(summary.sales); $("#stream-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending); $("#stream-rate").textContent = "今日个人预估"; $("#stream-yesterday-commission").textContent = moneyOrPending(summary.yesterdayShippedCommission, summary.yesterdayShippedPending); $("#stream-shipped").textContent = `昨日 ERP 实发 ${integer(summary.shippedCount, " 件")}`;
+  $("#stream-orders").textContent = integer(summary.orderCount, " 单"); $("#stream-sales").textContent = currency(summary.sales); $("#stream-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending); $("#stream-rate").textContent = summary.profitPending ? "等待ERP揽收/商品利润生成" : "今日个人预估"; $("#stream-yesterday-commission").textContent = moneyOrPending(summary.yesterdayShippedCommission, summary.yesterdayShippedPending); $("#stream-shipped").textContent = `昨日 ERP 实发 ${integer(summary.shippedCount, " 件")}`;
   $("#stream-product-body").innerHTML = products.length ? products.map((item) => `<tr><td><strong>${escapeHtml(item.name)}</strong></td><td>${integer(item.quantity, " 件")}</td><td>${currency(item.sales)}</td><td class="money">${moneyOrPending(item.personalCommission, summary.profitPending)}</td></tr>`).join("") : emptyRow(4, summary.profitPending ? "等待 ERP 单品利润生成" : "暂无今日商品数据");
-  $("#stream-income").innerHTML = mine ? `<span>${escapeHtml(mine.name)} · ${escapeHtml(mine.store)}</span><strong>${moneyOrPending(mine.commission, mine.pending)}</strong><small>只显示本人到手提成与本人责任扣款</small>` : `<span>本人预估提成</span><strong>待配置</strong><small>请在人员表配置登录账号与 PIN</small>`;
+  $("#stream-income").innerHTML = mine ? `<span>${escapeHtml(mine.name)} · ${escapeHtml(mine.store)}</span><strong class="income-earned">${moneyOrPending(mine.commission, mine.pending)}</strong><small>最终实发 = 计提 − 回退 − 损耗分摊 − 责任罚金</small>` : `<span>本人预估提成</span><strong>待配置</strong><small>请在人员表配置登录账号与 PIN</small>`;
   renderDetails($("#stream-deductions"), deductions, "当前没有本人扣款");
+  $("#stream-accrued-commission").textContent = moneyOrPending(mine?.currentAccruedCommission, mine?.pending);
+  $("#stream-commission-reversal").textContent = currency(mine?.commissionReversal || 0);
+  $("#stream-after-sales-loss-share").textContent = currency(mine?.afterSalesLossShare || 0);
+  $("#stream-responsibility-penalty").textContent = currency(mine?.responsibilityPenalty || 0);
+  $("#stream-final-commission").textContent = moneyOrPending(mine?.commission, mine?.pending);
+  $("#stream-adjustment-body").innerHTML = deductions.length ? deductions.map((item) => `<tr class="adjustment-row ${escapeHtml(item.category)}"><td>${escapeHtml(item.orderNo || "—")}</td><td>${escapeHtml(item.transactionDate || "—")}</td><td><span class="adjustment-kind ${escapeHtml(item.category)}">${escapeHtml(item.type)}</span></td><td class="adjustment-money">-${currency(item.amount)}</td><td><strong>${escapeHtml(item.note)}</strong><small class="adjustment-trace">揽收：${escapeHtml(item.pickupTime || "—")} ｜ 客服备注：${escapeHtml(item.customerServiceRemark || "—")} ｜ 判定：${escapeHtml(item.responsibilityType || "—")}${item.responsibilityRole ? `（${escapeHtml(item.responsibilityRole)}）` : ""}</small></td></tr>`).join("") : emptyRow(5, "本期没有提成回退、损耗分摊或责任罚金");
   $("#control-orders").textContent = integer(summary.orderCount, " 单"); $("#control-shipped").textContent = integer(summary.shippedCount, " 件"); $("#control-refunds").textContent = integer(summary.refundCount, " 单"); $("#control-commission").textContent = moneyOrPending(mine?.commission, mine?.pending || summary.profitPending); renderDetails($("#control-deductions"), deductions, "当前没有本人扣款");
   $("#control-exception-body").innerHTML = operationalExceptions.length ? operationalExceptions.map((item) => `<tr><td>${escapeHtml(item.type)}</td><td>${escapeHtml(item.orderNo)}</td><td>${escapeHtml(item.store || "—")}</td><td>${escapeHtml(item.reason || "—")}</td><td>${escapeHtml(item.status || "—")}</td></tr>`).join("") : emptyRow(5, "当前筛选期间暂无店铺异常");
   $("#team-cards").innerHTML = mine ? `<div class="team-card"><span>${escapeHtml(mine.name)} · ${escapeHtml(mine.role)}</span><strong>${moneyOrPending(mine.commission, mine.pending)}</strong></div>` : `<div class="team-card"><span>本人账号未配置</span><strong>—</strong></div>`;
@@ -135,7 +142,7 @@ function render(data) {
   if (window.lucide) window.lucide.createIcons();
 }
 
-function renderDetails(container, rows, emptyText) { container.innerHTML = rows.length ? rows.map((item) => `<div class="detail-item"><strong>${escapeHtml(item.type)}${item.name ? ` · ${escapeHtml(item.name)}` : ""}</strong><b>-${currency(item.amount)}</b><small>${escapeHtml(item.note || item.date || "已登记")}</small><small>${escapeHtml(item.status)}</small></div>`).join("") : `<div class="detail-item"><strong>${escapeHtml(emptyText)}</strong><small>责任扣款需在飞书“18_提成扣款明细”登记</small></div>`; }
+function renderDetails(container, rows, emptyText) { container.innerHTML = rows.length ? rows.map((item) => `<div class="detail-item ${escapeHtml(item.category)}"><strong>${escapeHtml(item.type)}${item.name ? ` · ${escapeHtml(item.name)}` : ""}</strong><b>-${currency(item.amount)}</b><small>${escapeHtml(item.orderNo || item.note || item.date || "已登记")}</small><small>${escapeHtml(item.status)}</small></div>`).join("") : `<div class="detail-item"><strong>${escapeHtml(emptyText)}</strong><small>在飞书“18_提成扣款明细”登记订单编号、原成交日期和扣款类型</small></div>`; }
 const viewTitles = { owner: ["经营数据一眼看完", "老板经营总览"], streamer: ["只看本人订单与提成", "主播工作台"], control: ["只看本人订单、售后与提成", "中控工作台"], collab: ["一份数据，三人协作", "直播协同工作台"] };
 function switchView(view) {
   const viewer = state.data?.viewer;
@@ -151,7 +158,7 @@ async function login() { const response = await fetch("/api/login", { method: "P
 $$('[data-view]').forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
 $("#refresh-btn").addEventListener("click", () => loadDashboard({ force: true })); $("#retry-btn").addEventListener("click", () => loadDashboard({ force: true })); $("#login-submit").addEventListener("click", login);
 $("#custom-date-btn").addEventListener("click", () => $("#custom-date-popover").classList.toggle("hidden")); $("#custom-apply").addEventListener("click", () => { state.period = "custom"; $("#custom-date-popover").classList.add("hidden"); loadDashboard(); });
-$("#store-filter-btn").addEventListener("click", () => openFilter("store")); $("#platform-filter-btn").addEventListener("click", () => openFilter("platform")); $("#basis-filter-btn").addEventListener("click", () => openFilter("basis")); $$(".period-chip").forEach((button) => button.addEventListener("click", () => { state.period = button.dataset.period; loadDashboard(); }));
+$("#store-filter-btn").addEventListener("click", () => openFilter("store")); $("#platform-filter-btn").addEventListener("click", () => openFilter("platform")); $$(".period-chip").forEach((button) => button.addEventListener("click", () => { state.period = button.dataset.period; loadDashboard(); }));
 $("#save-rules-btn").addEventListener("click", async () => { const rules = { "团队计提比例": Number($("#rule-team-rate").value) / 100, "单件团队封顶": Number($("#rule-cap").value), "主播分配比例": Number($("#rule-streamer-split").value) / 100, "中控分配比例": Number($("#rule-control-split").value) / 100, "助播分配比例": Number($("#rule-assistant-split").value) / 100 }; const response = await fetch("/api/rules", { method: "POST", headers: { ...authHeaders(), "content-type": "application/json" }, body: JSON.stringify({ rules, effectiveDate: $("#rule-effective-date").value }) }); if (!response.ok) return alert("规则保存失败，请检查权限和比例合计。"); await loadDashboard(); });
 $$(".copy-prompt").forEach((button) => button.addEventListener("click", async () => { try { await navigator.clipboard.writeText(button.dataset.prompt || ""); button.textContent = "已复制，去豆包粘贴"; setTimeout(() => { button.textContent = "复制提示词"; }, 1800); } catch { alert("复制失败，请手动复制提示词。"); } }));
 if (window.lucide) window.lucide.createIcons(); loadDashboard();

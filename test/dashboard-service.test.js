@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DashboardService } from "../src/dashboard-service.js";
+import { DashboardService, dashboardBasisForRange, isEffectivePaidTrade } from "../src/dashboard-service.js";
 
 function fakeFeishu() {
   const tables = [
@@ -41,17 +41,20 @@ test("经营看板按每件 ERP 利润计算团队提成，并只扣责任人个
   assert.equal(dashboard.commissions[0].commission, 13.4);
 });
 
-test("三种提成口径均按其范围内订单商品的逐件规则计算", async () => {
+test("日期决定自动核算口径，客户端参数不能把历史日期切回下单口径", async () => {
   const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
   const placed = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "placed" });
   const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
   const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
+  assert.equal(placed.meta.basis, "shipped");
+  assert.equal(shipped.meta.basis, "shipped");
+  assert.equal(monthly.meta.basis, "shipped");
   assert.equal(placed.commissions[0].grossCommission, 14.4);
   assert.equal(shipped.commissions[0].grossCommission, 14.4);
   assert.equal(monthly.commissions[0].grossCommission, 14.4);
 });
 
-test("看板实时提成口径分别请求 ERP 的下单和发货时间类型", async () => {
+test("历史日期只请求 ERP 发货时间口径", async () => {
   const calls = [];
   const kdzs = { listAll: async (method, params) => {
     calls.push({ method, params });
@@ -64,11 +67,9 @@ test("看板实时提成口径分别请求 ERP 的下单和发货时间类型", 
   const shipped = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "shipped" });
   const monthly = await service.getDashboard({ date: "2026-07-20", store: "测试店", basis: "monthly" });
   const profitTypes = calls.filter((item) => item.method === "kdzs.erp.api.report.gross.profit").map((item) => item.params.queryTimeType);
-  assert.deepEqual(profitTypes.slice(0, 2), [1, 1]);
-  assert.equal(profitTypes.filter((type) => type === 1).length, 2);
-  assert.equal(profitTypes.slice(2).every((type) => type === 3), true);
+  assert.equal(profitTypes.every((type) => type === 3), true);
   assert.equal(placed.commissions[0].grossCommission, 3);
-  assert.equal(placed.summary.profit, 500);
+  assert.equal(placed.summary.profit, 300);
   assert.equal(shipped.commissions[0].grossCommission, 3);
   assert.equal(monthly.commissions[0].grossCommission, 3);
 });
@@ -78,12 +79,89 @@ test("当天订单已同步但 ERP 毛利未生成时，不把利润和提成显
     ? [{ sellerNick: "测试店", platform: "抖音", payment: 120, receivedPayment: 120 }]
     : [] };
   const service = new DashboardService({ feishu: fakeFeishu(), getKdzs: async () => kdzs, cacheSeconds: 15 });
-  const dashboard = await service.getDashboard({ date: "2026-07-21", store: "测试店", basis: "placed" });
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  const today = `${part("year")}-${part("month")}-${part("day")}`;
+  const dashboard = await service.getDashboard({ date: today, store: "测试店", basis: "placed" });
   assert.equal(dashboard.summary.orderCount, 1);
   assert.equal(dashboard.summary.sales, 120);
   assert.equal(dashboard.summary.profitPending, true);
   assert.equal(dashboard.summary.profit, null);
   assert.equal(dashboard.commissions[0].commission, null);
+});
+
+test("历史缓存采用实发金额，不把直播间未发货下单额计入昨天销售", async () => {
+  const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
+  const referenceData = { configuration: {}, peopleRecords: [], overviewRecords: [], deductionRecords: [], ruleRecords: [] };
+  const rawRows = [
+    { date: "2026-07-20", time_basis: 1, orders: [{ sellerNick: "测试店", platform: "抖音", orderCount: 300, receivedPayment: 30000 }], storeProfits: [], productProfits: [], refunds: [] },
+    { date: "2026-07-20", time_basis: 3, orders: [{ sellerNick: "测试店", platform: "抖音", orderCount: 160, receivedPayment: 16000 }], storeProfits: [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: 3200 }], productProfits: [{ sellerNick: "测试店", platform: "抖音", itemTitle: "实发商品", skuId: "sku", actualNumber: 160, actualPayment: 16000, netSalesProfit: 3200 }], refunds: [] },
+  ];
+  const dashboard = await service.getDashboard({ date: "2026-07-20", store: "测试店", platform: "抖音", basis: "placed", rawRows, referenceData });
+  assert.equal(dashboard.meta.basis, "shipped");
+  assert.equal(dashboard.summary.sales, 16000);
+  assert.equal(dashboard.summary.orderCount, 160);
+  assert.equal(dashboard.summary.profit, 3200);
+});
+
+test("跨今天的周期今天按下单、历史按发货", () => {
+  assert.equal(dashboardBasisForRange({ startDate: "2026-07-20", endDate: "2026-07-20" }, "2026-07-21"), "shipped");
+  assert.equal(dashboardBasisForRange({ startDate: "2026-07-21", endDate: "2026-07-21" }, "2026-07-21"), "placed");
+  assert.equal(dashboardBasisForRange({ startDate: "2026-07-20", endDate: "2026-07-21" }, "2026-07-21"), "mixed");
+});
+
+test("有效成交订单仅保留已付款、非关闭、非测试且非全额退款订单", () => {
+  assert.equal(isEffectivePaidTrade({ payment: 100, status: "已付款" }), true);
+  assert.equal(isEffectivePaidTrade({ payment: 0, status: "未付款" }), false);
+  assert.equal(isEffectivePaidTrade({ payment: 100, status: "交易关闭" }), false);
+  assert.equal(isEffectivePaidTrade({ payment: 100, source: "测试订单" }), false);
+  assert.equal(isEffectivePaidTrade({ payment: 100, refundAmount: 100 }), false);
+  assert.equal(isEffectivePaidTrade({ payment: 100, refundAmount: 20 }), true);
+});
+
+test("当天成交统计按付款时间查询并过滤无效订单", async () => {
+  const calls = [];
+  const client = { listAll: async (method, params) => {
+    calls.push({ method, params });
+    return [
+      { sellerNick: "测试店", platform: "抖音", payment: 100, receivedPayment: 100, status: "已付款" },
+      { sellerNick: "测试店", platform: "抖音", payment: 80, receivedPayment: 0, status: "未付款" },
+      { sellerNick: "测试店", platform: "抖音", payment: 60, receivedPayment: 60, status: "交易关闭" },
+      { sellerNick: "测试店", platform: "抖音", payment: 40, receivedPayment: 40, refundAmount: 40, status: "已退款" },
+    ];
+  } };
+  const service = new DashboardService({ feishu: fakeFeishu() });
+  const summary = await service.queryOrders(client, "2026-07-23", "2026-07-23", "测试店", "抖音");
+  assert.equal(calls[0].params.timeType, "PAY_TIME");
+  assert.equal(summary.orderCount, 1);
+  assert.equal(summary.sales, 100);
+});
+
+test("提成回退和责任罚金分别展示并按固定公式抵扣", async () => {
+  const service = new DashboardService({ feishu: fakeFeishu(), cacheSeconds: 15 });
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+  const part = (type) => parts.find((item) => item.type === type)?.value;
+  const today = `${part("year")}-${part("month")}-${part("day")}`;
+  const referenceData = {
+    configuration: {}, overviewRecords: [], ruleRecords: [],
+    peopleRecords: [{ fields: { "姓名": "主播A", "角色": "主播", "所属店铺": "测试店", "启用提成展示": "是" } }],
+    deductionRecords: [
+      { fields: { "日期": Date.parse(`${today}T00:00:00+08:00`), "姓名": "主播A", "店铺": "测试店", "扣款类型": "提成回退", "订单编号": "T-100", "原成交日期": Date.parse("2026-06-20T00:00:00+08:00"), "金额": 2, "说明": "订单售后退货，调减过往提成" } },
+      { fields: { "日期": Date.parse(`${today}T00:00:00+08:00`), "姓名": "主播A", "店铺": "测试店", "扣款类型": "责任罚金", "订单编号": "T-101", "原成交日期": Date.parse("2026-06-21T00:00:00+08:00"), "金额": 1, "处罚原因": "配货错误" } },
+    ],
+  };
+  const rawRows = [
+    { date: today, time_basis: 2, orders: [{ sellerNick: "测试店", platform: "抖音", orderCount: 1, receivedPayment: 100 }], storeProfits: [], productProfits: [], refunds: [] },
+    { date: today, time_basis: 3, orders: [], storeProfits: [{ sellerNick: "测试店", platform: "抖音", netSalesProfit: 100 }], productProfits: [{ sellerNick: "测试店", platform: "抖音", itemTitle: "商品A", skuId: "sku", number: 1, actualNumber: 0, payment: 100, netSalesProfit: 100 }], refunds: [] },
+  ];
+  const dashboard = await service.getDashboard({ date: today, store: "测试店", viewer: { scope: "employee", name: "主播A", role: "主播", store: "测试店" }, rawRows, referenceData });
+  assert.equal(dashboard.commissions[0].currentAccruedCommission, 3);
+  assert.equal(dashboard.commissions[0].commissionReversal, 2);
+  assert.equal(dashboard.commissions[0].responsibilityPenalty, 1);
+  assert.equal(dashboard.commissions[0].commission, 0);
+  assert.deepEqual(dashboard.deductions.map((item) => item.category), ["reversal", "penalty"]);
+  assert.equal(dashboard.deductions[0].orderNo, "T-100");
+  assert.equal(dashboard.deductions[1].note, "配货错误");
 });
 
 test("昨日实发提成和本月经营汇总分别按独立日期范围读取", async () => {

@@ -44,6 +44,7 @@ export function getConfig({ requireKdzs = true } = {}) {
       requestTimeoutMs: integer("KDZS_REQUEST_TIMEOUT_MS", 30000),
       tradeModifiedTimeType: process.env.KDZS_TRADE_MODIFIED_TIME_TYPE || "MODIFIED_TIME",
       tradeCreatedTimeType: process.env.KDZS_TRADE_CREATED_TIME_TYPE || "CREATE_TIME",
+      tradePaymentTimeType: process.env.KDZS_TRADE_PAYMENT_TIME_TYPE || "PAY_TIME",
     },
     sync: {
       startDate: process.env.SYNC_START_DATE || "2026-01-01",

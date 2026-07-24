@@ -7,7 +7,7 @@ import { getConfig } from "./config.js";
 import { FeishuClient } from "./feishu-client.js";
 import { createDeliveryKdzsClient } from "./session-provider.js";
 import { DeliverySyncService } from "./delivery-sync.js";
-import { DashboardService, dashboardDateRange } from "./dashboard-service.js";
+import { DashboardService, dashboardBasisForRange, dashboardDateRange, isEffectivePaidTrade } from "./dashboard-service.js";
 import { DashboardSnapshotStore } from "./dashboard-snapshot-store.js";
 import { addDays, dateOnly } from "./utils.js";
 
@@ -20,6 +20,7 @@ const dashboard = new DashboardService({
   cacheSeconds: Math.max(300, config.runtime.dashboardCacheSeconds),
   dashboardUrl: config.runtime.dashboardUrl,
   accessToken: config.runtime.dashboardAccessToken,
+  paymentTimeType: config.kdzs.tradePaymentTimeType,
   getKdzs: () => createDeliveryKdzsClient({ feishu: sourceFeishu, config }),
 });
 const dashboardSnapshots = new DashboardSnapshotStore({ connectionString: config.runtime.databaseUrl });
@@ -77,6 +78,7 @@ function dateSeries(startDate, endDate) {
 function compactOrders(rows) {
   const grouped = new Map();
   for (const row of rows || []) {
+    if (!isEffectivePaidTrade(row)) continue;
     const key = `${row.sellerNick || ""}|${row.platform || ""}`;
     const item = grouped.get(key) || { sellerNick: row.sellerNick, platform: row.platform, orderCount: 0, receivedPayment: 0 };
     item.orderCount += 1;
@@ -86,10 +88,10 @@ function compactOrders(rows) {
   return [...grouped.values()];
 }
 
-function compactProducts(rows) {
+function compactProducts(rows, { shipped = false } = {}) {
   const grouped = new Map();
   for (const row of rows || []) {
-    const quantity = Math.max(0, Number(row.number) || 0);
+    const quantity = Math.max(0, Number(shipped ? row.actualNumber ?? row.number : row.number) || 0);
     const profit = Number(row.netSalesProfit) || 0;
     // Group only rows with the exact same unit profit. This preserves the per-item
     // commission cap; grouping solely by SKU would change the result after cost changes.
@@ -100,9 +102,23 @@ function compactProducts(rows) {
       number: 0, payment: 0, netSalesProfit: 0, actualCost: 0,
     };
     item.number += quantity;
-    item.payment += Number(row.payment) || 0;
+    item.payment += Number(shipped ? row.actualPayment ?? row.payment : row.payment) || 0;
     item.netSalesProfit += profit;
     item.actualCost += Number(row.actualCost ?? row.netSalesCost ?? row.costPrice ?? row.cost) || 0;
+    grouped.set(key, item);
+  }
+  return [...grouped.values()];
+}
+
+function compactShippedOrders(rows) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const key = `${row.sellerNick || ""}|${row.platform || ""}`;
+    const item = grouped.get(key) || { sellerNick: row.sellerNick, platform: row.platform, orderCount: 0, receivedPayment: 0 };
+    // The ERP shipment profit report is the settlement source. It exposes actual
+    // payment, while its quantity is a piece count rather than an order count.
+    item.orderCount += Number(row.actualNumber ?? row.number) || 0;
+    item.receivedPayment += Number(row.actualPayment ?? row.payment) || 0;
     grouped.set(key, item);
   }
   return [...grouped.values()];
@@ -112,23 +128,25 @@ function compactRefunds(rows) {
   return (rows || []).map((row) => ({
     tid: row.tid, orderId: row.orderId, tradeId: row.tradeId, refundId: row.refundId, sellerNick: row.sellerNick,
     reason: row.reason, refundReason: row.refundReason, remark: row.remark, refundStatus: row.refundStatus,
-    status: row.status, refundAmount: Number(row.refundAmount) || 0,
+    status: row.status, refundStatusDesc: row.refundStatusDesc, returnLogisticsNo: row.returnLogisticsNo,
+    customerServiceRemark: row.customerServiceRemark || row.csRemark || row.serviceRemark || row.sellerMemo || row.sellerRemark || row.remark,
+    responsibilityType: row.responsibilityType, responsibilityRole: row.responsibilityRole, refundAmount: Number(row.refundAmount) || 0,
   }));
 }
 
 async function cacheDashboardDay(client, day) {
   const range = { startTime: `${day} 00:00:00`, endTime: `${day} 23:59:59` };
-  const [orders, refunds, placedStores, placedProducts, shippedStores, shippedProducts] = await Promise.all([
-    client.listAll("kdzs.erp.api.trade.list", { timeType: "CREATE_TIME", ...range }, 200),
+  const [orders, refunds, paidStores, paidProducts, shippedStores, shippedProducts] = await Promise.all([
+    client.listAll("kdzs.erp.api.trade.list", { timeType: config.kdzs.tradePaymentTimeType, ...range }, 200),
     client.listAll("kdzs.erp.api.refund.list", { createTimeStart: range.startTime, createTimeEnd: range.endTime }, 200),
-    client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 1, queryGroupType: 2, ...range }),
-    client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 1, queryGroupType: 8, ...range }),
+    client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 2, queryGroupType: 2, ...range }),
+    client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 2, queryGroupType: 8, ...range }),
     client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 2, ...range }),
     client.listAll("kdzs.erp.api.report.gross.profit", { queryTimeType: 3, queryGroupType: 8, ...range }),
   ]);
   await Promise.all([
-    dashboardSnapshots.writeDaily({ date: day, basis: 1, orders: compactOrders(orders), refunds: compactRefunds(refunds), storeProfits: placedStores, productProfits: compactProducts(placedProducts) }),
-    dashboardSnapshots.writeDaily({ date: day, basis: 3, orders: compactOrders(orders), refunds: compactRefunds(refunds), storeProfits: shippedStores, productProfits: compactProducts(shippedProducts) }),
+    dashboardSnapshots.writeDaily({ date: day, basis: 2, orders: compactOrders(orders), refunds: compactRefunds(refunds), storeProfits: paidStores, productProfits: compactProducts(paidProducts) }),
+    dashboardSnapshots.writeDaily({ date: day, basis: 3, orders: compactShippedOrders(shippedStores), refunds: compactRefunds(refunds), storeProfits: shippedStores, productProfits: compactProducts(shippedProducts, { shipped: true }) }),
   ]);
 }
 
@@ -179,7 +197,7 @@ async function refreshDashboardSnapshot() {
       dashboardSnapshots.readDailyRange([range.startDate, previous, `${range.endDate.slice(0, 7)}-01`].sort()[0], range.endDate),
       dashboardSnapshots.readReference(),
     ]);
-    if (!reference || !rawRows.some((row) => row.date === range.endDate && Number(row.time_basis) === 1)) return false;
+    if (!reference || !rawRows.some((row) => row.date === range.endDate && Number(row.time_basis) === 2)) return false;
     const data = await dashboard.getDashboard({ ...options, rawRows, referenceData: reference });
     await dashboardSnapshots.write(options, data);
     state.lastDashboardSnapshotAt = new Date().toISOString();
@@ -225,7 +243,8 @@ async function refreshDashboardRenderedSnapshots() {
     ];
     for (const viewer of viewers) {
       const scopedStores = viewer.scope === "owner" ? stores : [viewer.store];
-      for (const period of ["today", "yesterday", "week", "month"]) for (const store of scopedStores) for (const platform of platforms) for (const basis of ["placed", "shipped", "monthly"]) {
+      for (const period of ["today", "yesterday", "week", "month"]) for (const store of scopedStores) for (const platform of platforms) {
+        const basis = dashboardBasisForRange(dashboardDateRange(period));
         const options = { period, store, platform, basis, viewer };
         const result = await dashboard.getDashboard({ ...options, rawRows, referenceData: reference });
         await dashboardSnapshots.write(options, result);
@@ -281,6 +300,7 @@ async function runOperationalSync() {
     state.lastSyncAt = new Date().toISOString();
     state.lastSyncError = null;
     void refreshDashboardRawCache();
+    void refreshDashboardReferenceCache();
     return true;
   } catch (error) {
     state.lastSyncError = error.message;
@@ -448,6 +468,7 @@ const server = http.createServer(async (request, response) => {
     const viewer = viewerFromRequest(request, url);
     if (!viewer) return json(response, 401, { error: "unauthorized" });
     try {
+      const range = dashboardDateRange(url.searchParams.get("period") || "today", url.searchParams.get("date") || undefined, url.searchParams.get("startDate") || undefined, url.searchParams.get("endDate") || undefined);
       const options = {
         date: url.searchParams.get("date") || undefined,
         period: url.searchParams.get("period") || "today",
@@ -455,7 +476,9 @@ const server = http.createServer(async (request, response) => {
         endDate: url.searchParams.get("endDate") || undefined,
         store: url.searchParams.get("store") || "全部店铺",
         platform: url.searchParams.get("platform") || "全部平台",
-        basis: url.searchParams.get("basis") || "placed",
+        // Settlement basis is selected by the server from the date range. A client
+        // must not be able to switch yesterday back to unshipped order-time data.
+        basis: dashboardBasisForRange(range),
         viewer,
       };
       const data = url.searchParams.get("refresh") === "1" ? null : await dashboardSnapshots.read(options);
